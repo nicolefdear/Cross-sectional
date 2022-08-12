@@ -1,0 +1,347 @@
+---
+title: "Transactional sex in AFRICOS"
+author: "Nicole Dear"
+date: "July 8, 2021"
+output:
+  html_document:
+    df_print: paged
+    theme: lumen
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# install and load packages
+library(rmarkdown)
+library(dplyr)
+library(zoo)
+library(tidyverse)
+library(tidyr)
+library(ggplot2)
+library(readstata13)
+library(gtsummary)
+library(Hmisc)
+library(lubridate)
+```
+
+
+```{r message=F, warning=F, echo=F}
+# set working directory
+setwd("C:/Users/ndear/Box Sync/Shared Files- Reed and Esber/Transactional sex/analysis")
+
+# load data keeping visits from before covid pause
+a <- read.dta13("r4pdata_1jun2021.dta", generate.factors=T, nonint.factors=T) %>% filter(visitdt<=as.Date("2020-03-19") & hivflag!=.)
+
+# find column number
+# which(colnames(a)=="occup_j")
+
+# drop missed visits & carryforward variables collected at v1 only
+b <- a %>% filter(misvis==0 & visit<=90) %>% dplyr::group_by(subjid) %>% 
+  fill(diagdtn, art_sdtn, whostg, hadsex, hadsexag, .direction = "down") %>% dplyr::ungroup()
+
+# recode misdiagnoses
+b$hivflag[b$subjid=="A01-0026"|b$subjid=="A01-0159"|b$subjid=="A01-0232"|b$subjid=="A01-0343"|b$subjid=="A01-0402"|
+            b$subjid=="A01-0527"|b$subjid=="A01-0587"|b$subjid=="A01-0603"|b$subjid=="B04-0054"] <- 2
+
+# recode nonresponse as missing
+b$sexrcv[b$sexrcv==8] <- NA
+b$alcohol[b$alcohol==8] <- NA
+b$sxptlnum[b$sxptlnum<0] <- NA
+b$sxactfrq[b$sxactfrq==8] <- NA
+b$sxptrnum[b$sxptrnum==0.1] <- 1
+b$usecondr[b$usecondr==8] <- NA
+b$usecondc[b$usecondc==8] <- NA
+b$getcond[b$getcond==8] <- NA
+b$freecond[b$freecond==7] <- NA
+b$freecond[b$freecond==8] <- NA
+b$provide[b$provide==5] <- NA
+b$harm[b$harm==5|b$harm==8] <- NA
+b$harmsxor[b$harmsxor==5|b$harmsxor==8] <- NA
+b$sexchild[b$sexchild==-1|b$sexchild==8] <- NA
+b$sexforce[b$sexforce==5|b$sexforce==8] <- NA
+b$afraid[b$afraid==5|b$afraid==8] <- NA
+b$whostg[b$whostg==7] <- NA
+
+# recode free text responses
+tomatch <- c("MONEY","CASH","HELA","PESA")
+h <- grepl(paste(tomatch,collapse="|"), b$sexrctxt, ignore.case=T)
+b$sexrcv_f[h] <- with(b, 1)
+
+tomatch2 <- c("COMMERCIAL","SEX WORKER","SEXUAL WORKER")
+i <- grepl(paste(tomatch2,collapse="|"), b$occuptxt, ignore.case=T)
+b$occup_j[i] <- with(b, 1)
+
+# fill in missing values for age and duration on ART
+j <- is.na(b$agev)
+b$agev[j] <- with(b, (visitdt[j]-dobdtn[j])/365.25)
+
+k <- is.na(b$dur_art)
+b$dur_art[k] <- with(b, (visitdt[k]-art_sdtn[k])/365.25)
+
+# This function replaces missing values with zeros
+# It is appropriate to use this function in a circumstance where it is safe to assume that missingness is equivalent "no"
+g=function(x){
+  y=substr(as.character(x),1,1)
+  b1=is.na(x)
+  y[b1]=rep("0",sum(b1))
+  y=as.numeric(y)
+  return(y)
+}
+
+b$whiv_a <- g(b$whiv_a)
+b$whiv_b <- g(b$whiv_b)
+b$whiv_c <- g(b$whiv_c)
+b$whiv_d <- g(b$whiv_d)
+b$whiv_e <- g(b$whiv_e)
+b$whiv_f <- g(b$whiv_f)
+b$whiv_g <- g(b$whiv_g)
+b$whiv_h <- g(b$whiv_h)
+b$whiv_i <- g(b$whiv_i)
+b$whiv_j <- g(b$whiv_j)
+b$occup_j <- g(b$occup_j)
+
+# categorize continuous variables/collapse categorical variables
+b$agec <- ifelse(b$agev<25,1,ifelse(b$agev>=25&b$agev<35,2,ifelse(b$agev>=35&b$agev<45,3,4)))
+b$educat2 <- ifelse(b$educat==0|b$educat==1,0,ifelse(b$educat==2|b$educat==3,1,2))
+b$married <- ifelse(b$marital==2,1,0)
+b$earlysex <- ifelse(b$hadsexag<15,1,0)
+b$stigma <-  ifelse(b$hvste_a==1|b$hvste_b==1|b$hvste_c==1,1,0)
+b$disclose <- ifelse(b$whiv_a==1|b$whiv_b==1|b$whiv_c==1|b$whiv_d==1|b$whiv_e==1|b$whiv_f==1|b$whiv_g==1|b$whiv_h==1|b$whiv_i==1|b$whiv_j==1,1,0)
+b$missdose <- ifelse(b$takearv==0,0,ifelse(b$missarv==0,1,2))
+b$cd4cat <- ifelse(b$cd3_4_n<200,1,0)
+b$vs <- ifelse(b$vl<1000,1,0)
+b$durartcat <- ifelse(b$takearv==0,0,ifelse(b$dur_art<0.5,1,ifelse(b$dur_art>=0.5&b$dur_art<2,2,ifelse(b$dur_art>=2&b$dur_art<4,3,4))))
+b$regpartner6mo <- ifelse(b$sxptrnum==0,0,ifelse(b$sxptrnum==1,1,ifelse(b$sxptrnum>=2&b$sxptrnum<5,2,3)))
+b$caspartner6mo <- ifelse(b$sxptcnum==0,0,ifelse(b$sxptcnum==1,1,ifelse(b$sxptcnum>=2&b$sxptcnum<5,2,3)))
+b$regpartcond <- ifelse(b$regpartner6mo==0,0,ifelse(b$usecondr==1,1,2))
+b$caspartcond <- ifelse(b$caspartner6mo==0,0,ifelse(b$usecondc==1,1,2))
+
+# variables to factors and label
+b$agec <- factor(b$agec, levels=c(1,2,3,4), labels=c("<25","25-34","35-44","45+"))
+b$progid <- factor(b$progid, levels=c(1,2,3,4,5), labels=c("Uganda","SRV, Kenya","Kisumu West, Kenya","Tanzania","Nigeria"))
+b$hivflag <- factor(b$hivflag, levels=c(1,2), labels=c("PLWH","PLWoH"))
+b$hivstat <- factor(b$hivstat, levels=c(0,1,2), labels=c("PLWoH","PLWH","Unknown"))
+b$gender <- factor(b$gender, levels=c(1,2), labels=c("Male","Female"))
+b$takearv <- factor(b$takearv, levels=c(0,1), labels=c("No","Yes"))
+b$educat2 <- factor(b$educat2, levels=c(0,1,2), labels=c("None or some primary","Primary or some secondary","Secondary and above"))
+b$married <- factor(b$married, levels=c(0,1), labels=c("No","Yes"))
+b$stigma <- factor(b$stigma, levels=c(0,1), labels=c("No","Yes"))
+b$disclose <- factor(b$disclose, levels=c(0,1), labels=c("No","Yes"))
+b$missdose <- factor(b$missdose, levels=c(0,1,2), labels=c("Not on ART","No missed doses","1+ missed doses"))
+b$whostg <- factor(b$whostg, levels=c(1,2,3,4), labels=c("I","II","III","VI"))
+b$cd4cat <- factor(b$cd4cat, levels=c(0,1), labels=c(">=200","<200"))
+b$vs <- factor(b$vs, levels=c(0,1), labels=c(">=1000","<1000"))
+b$durartcat <- factor(b$durartcat,levels=c(0,1,2,3,4), labels=c("Not on ART","<6 mo","6 mo to <2 yrs","2 yrs to <4 yrs","4+ yrs"))
+b$employed <- factor(b$employed, levels=c(0,1), labels=c("No","Yes"))
+b$occup_j <- factor(b$occup_j, levels=c(0,1), labels=c("No","Yes"))
+b$readwrit <- factor(b$readwrit, levels=c(0,1), labels=c("No","Yes"))
+b$food <- factor(b$food, levels=c(0,1), labels=c("No","Yes"))
+b$alcohol <- factor(b$alcohol, levels=c(0,1), labels=c("No","Yes"))
+b$drug <- factor(b$drug, levels=c(0,1), labels=c("No","Yes"))
+b$cigaret <- factor(b$cigaret, levels=c(0,1), labels=c("No","Yes"))
+b$prison <- factor(b$prison, levels=c(0,1), labels=c("No","Yes"))
+b$sxactfrq <- factor(b$sxptrnum, levels=c(0,1,2,3,4), labels=c("None","1-3","4-6","7-10",">10"))
+b$provide <- factor(b$provide, levels=c(0,1,2,3,4), labels=c("None","1 person","2-5 persons","6-10 persons",">10 persons"))
+b$regpartner6mo <- factor(b$regpartner6mo, levels=c(0,1,2,3), labels=c("None","One","2 to 4","5 or more"))
+b$caspartner6mo <- factor(b$caspartner6mo, levels=c(0,1,2,3), labels=c("None","One","2 to 4","5 or more"))
+b$regpartcond <- factor(b$regpartcond, levels=c(0,1,2), labels=c("No regular partner","Used condom","Did not use condom"))
+b$caspartcond <- factor(b$caspartcond, levels=c(0,1,2), labels=c("No casual partner","Used condom","Did not use condom"))
+b$getcond <- factor(b$getcond, levels=c(0,1,2,3,4), labels=c("Very easy","Easy","Difficult","Very difficult","I don't try to get condoms"))
+b$freecond <- factor(b$freecond, levels=c(0,1), labels=c("No","Yes"))
+b$sexrcv <- factor(b$sexrcv, levels=c(0,1), labels=c("No","Yes"))
+b$sexrcv_a <- factor(b$sexrcv_a, levels=c(0,1), labels=c("No","Yes"))
+b$sexrcv_b <- factor(b$sexrcv_b, levels=c(0,1), labels=c("No","Yes"))
+b$sexrcv_c <- factor(b$sexrcv_c, levels=c(0,1), labels=c("No","Yes"))
+b$sexrcv_d <- factor(b$sexrcv_d, levels=c(0,1), labels=c("No","Yes"))
+b$sexrcv_e <- factor(b$sexrcv_e, levels=c(0,1), labels=c("No","Yes"))
+b$sexrcv_f <- factor(b$sexrcv_f, levels=c(0,1), labels=c("No","Yes"))
+b$harm <- factor(b$harm, levels=c(0,1), labels=c("No","Yes"))
+b$harmsxor <- factor(b$harmsxor, levels=c(0,1), labels=c("No","Yes"))
+b$sexchild <- factor(b$sexchild, levels=c(0,1), labels=c("No","Yes"))
+b$sexforce <- factor(b$sexforce, levels=c(0,1), labels=c("No","Yes"))
+b$afraid <- factor(b$afraid, levels=c(0,1), labels=c("No","Yes"))
+b$hadsex <- factor(b$hadsex, levels=c(0,1), labels=c("No","Yes"))
+b$earlysex <- factor(b$earlysex, levels=c(0,1), labels=c("15+ years","<15 years"))
+b$depress <- factor(b$depress, levels=c(0,1), labels=c("No","Yes"))
+
+# label vars
+label(b$agec) <- "Age (years)"
+label(b$agev) <- "Age (years)"
+label(b$gender) <- "Sex"
+label(b$hivflag) <- "HIV status"
+label(b$progid) <- "Study site"
+label(b$educat2) <- "Education"
+label(b$readwrit) <- "Able to read and write"
+label(b$employed) <- "Employed"
+label(b$married) <- "Married"
+label(b$food) <- "Enough food to eat (past 12 months)"
+label(b$alcohol) <- "Consume alcohol"
+label(b$cigaret) <- "Smoke cigarettes"
+label(b$drug) <- "Use recreational drugs"
+label(b$prison) <- "Incarcerated"
+label(b$depress) <- "Depressed"
+label(b$cd4cat) <- "CD4 (cells/mm3)"
+label(b$vs) <- "Viral load (copies/mL)"
+label(b$whostg) <- "WHO stage at HIV dx"
+label(b$takearv) <- "Take ART"
+label(b$durartcat) <- "Duration on ART"
+label(b$regpartner6mo) <- "No. regular partners (past 6 months)"
+label(b$caspartner6mo) <- "No. casual partners (past 6 months)"
+label(b$stigma) <- "Experienced HIV stigma"
+label(b$disclose) <- "Disclosed HIV status"
+label(b$missdose) <- "Missed doses of ART (past 30 days)"
+label(b$sxactfrq) <- "No. times engaged in sex in past month"
+label(b$provide) <- "No. dependents"
+label(b$regpartcond) <- "Used condom at last sex with regular partner"
+label(b$caspartcond) <- "Used condom at last sex with casual partner"
+label(b$getcond) <- "Ease of access to condoms"
+label(b$freecond) <- "Access to free condoms"
+label(b$earlysex) <- "Age at sexual debut"
+label(b$harm) <- "Injured or physically harmed by a partner or acquaintance"
+label(b$harmsxor) <- "Physically harmed or threatened due to sexual orientation"
+label(b$sexchild) <- "Sexually assaulted as a child"
+label(b$sexforce) <- "Forced to have sex"
+label(b$afraid) <- "Afraid of partner"
+label(b$hadsex) <- "Ever had sex"
+label(b$occup_j) <- "Sex worker"
+label(b$sexrcv) <- "Engaged in transactional sex"
+
+# transactional sex by visit
+table(b$visit, b$sexrcv, b$hivflag, useNA = "ifany")
+
+# make dataset with a few variables to summarize, restricted to those who had ever had sex & responded to trx sex question
+c <- b %>% select("subjid","visitdt","visit","hivflag","agev","agec","gender","progid","readwrit","educat2","employed","occup_j",
+                  "provide","married","food","alcohol","cigaret","drug","prison","earlysex","regpartner6mo","caspartner6mo",
+                  "regpartcond","caspartcond","harm","harmsxor","sexchild","sexforce","afraid","depress","takearv","durartcat",
+                  "stigma","disclose","missdose","cd4cat","vs","sexrcv","sexrcv_a","sexrcv_b","sexrcv_c","sexrcv_d","sexrcv_e",
+                  "sexrcv_f","hadsex","getcond","freecond") %>% filter(hadsex=="Yes" & (sexrcv=="Yes"|sexrcv=="No"))
+
+# check if any ppts identify as a sex worker (visit 1)
+f <- c %>% filter(visit==1)
+table(f$sexrcv, f$occup_j, useNA = "ifany")
+
+# separate by HIV status
+a1 <- c %>% filter(visit==1) %>% select(4,6:8,10:11,13:20,30,38)
+a2 <- c %>% filter(hivflag=="PLWH" & visit==1) %>% select(6:8,10:11,13:20,30:38)
+a3 <- c %>% filter(hivflag=="PLWoH" & visit==1) %>% select(6:8,10:11,13:20,30,38)
+
+# keep complete cases
+b1=complete.cases(a1)
+A1=a1[b1,]
+
+b2=complete.cases(a2)
+A2=a2[b2,]
+
+b3=complete.cases(a3)
+A3=a3[b3,]
+```
+
+
+### Table 1
+
+```{r message=F, warning=F, echo=F}
+table1 <- A1 %>% tbl_summary(by=sexrcv) %>% add_p() %>% add_overall() %>% bold_p() %>%
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Engaged in transactional sex**") %>% 
+  modify_caption("**Table 1a. Participant characteristics at enrollment**")
+table1
+
+table2 <- A2 %>% tbl_summary(by=sexrcv) %>% add_p() %>% add_overall() %>% bold_p() %>%
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Engaged in transactional sex**") %>% 
+  modify_caption("**Table 1b. PLWH characteristics at enrollment**")
+table2
+
+table3 <- A3 %>% tbl_summary(by=sexrcv) %>% add_p() %>% add_overall() %>% bold_p() %>%
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Engaged in transactional sex**") %>% 
+  modify_caption("**Table 1c. PLWoH characteristics at enrollment**")
+table3
+```
+
+
+### Unadjusted models for all participants (enrollment visit)
+
+```{r message=F, warning=F, echo=F}
+unadj1 <- A1 %>%
+  select(sexrcv, hivflag, agec, gender, progid, educat2, employed, provide,
+         married, food, alcohol, cigaret, drug, prison, earlysex, depress) %>%
+    tbl_uvregression(
+    method = glm,
+    y = sexrcv,
+    method.args = list(family = binomial(link='logit')),
+    exponentiate = TRUE,
+    pvalue_fun = ~style_pvalue(.x, digits = 2)
+  ) %>%
+  bold_p() %>%        # bold p-values under a given threshold (default 0.05)
+  bold_labels()
+unadj1
+```
+
+
+### Unadjusted models for PLWH (enrollment visit)
+
+```{r message=F, warning=F, echo=F}
+unadj2 <- A2 %>%
+  select(sexrcv, agec, gender, progid, educat2, employed, provide, married, food,
+         alcohol, cigaret, drug, prison, earlysex, depress, takearv, 
+         durartcat, stigma, disclose, missdose, cd4cat, vs) %>%
+    tbl_uvregression(
+    method = glm,
+    y = sexrcv,
+    method.args = list(family = binomial(link='logit')),
+    exponentiate = TRUE,
+    pvalue_fun = ~style_pvalue(.x, digits = 2)
+  ) %>%
+  bold_p() %>%        # bold p-values under a given threshold (default 0.05)
+  bold_labels()
+unadj2
+```
+
+
+### Unadjusted models for all PLWoH (enrollment visit)
+
+```{r message=F, warning=F, echo=F}
+unadj3 <- A3 %>%
+  select(sexrcv, agec, gender, progid, educat2, employed, provide,
+         married, food, alcohol, cigaret, drug, prison, earlysex, depress) %>%
+    tbl_uvregression(
+    method = glm,
+    y = sexrcv,
+    method.args = list(family = binomial(link='logit')),
+    exponentiate = TRUE,
+    pvalue_fun = ~style_pvalue(.x, digits = 2)
+  ) %>%
+  bold_p() %>%        # bold p-values under a given threshold (default 0.05)
+  bold_labels()
+unadj3
+```
+
+
+### Adjusted models for all participants (enrollment visit)
+
+```{r message=F, warning=F, echo=F}
+m1 <- glm(sexrcv ~ ., A1, family = binomial(link='logit'))
+adj1 <- tbl_regression(m1, exponentiate = TRUE) %>% bold_p()
+adj1
+```
+
+
+### Adjusted models for PLWH (enrollment visit)
+
+```{r message=F, warning=F, echo=F}
+m2 <- glm(sexrcv ~ ., A2, family = binomial(link='logit'))
+adj2 <- tbl_regression(m2, exponentiate = TRUE) %>% bold_p()
+adj2
+```
+
+
+### Adjusted models for PLWoH (enrollment visit)
+
+```{r message=F, warning=F, echo=F}
+m3 <- glm(sexrcv ~ ., A3, family = binomial(link='logit'))
+adj3 <- tbl_regression(m3, exponentiate = TRUE) %>% bold_p()
+adj3
+```
+
+### References
+https://cran.r-project.org/web/packages/gtsummary/vignettes/tbl_summary.html
+http://www.danieldsjoberg.com/gtsummary/articles/tbl_regression.html#univariate-regression
