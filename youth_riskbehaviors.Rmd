@@ -1,0 +1,279 @@
+---
+title: "Condom use and other risky behavior in AFRICOS youth cohort"
+author: "Nicole Dear"
+date: "2023-10-25"
+output:
+  html_document:
+    df_print: paged
+    theme: lumen
+  pdf_document: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# install and load packages
+library(rmarkdown)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+library(tidyverse)
+library(tidyr)
+library(gtsummary)
+library(Hmisc)
+library(lubridate)
+library(table1)
+```
+
+
+
+```{r message=F, warning=F, echo=F}
+# set working directory
+setwd("C:/Users/ndear/Box/Shared Files- Reed and Esber/Youth/Risky")
+
+# load data (data from Fauci exported as excel)
+data <- read_excel("youth_risky_1sep2023.xlsx")
+names(data) <- tolower(names(data))
+# names(data)
+
+# impute missing data
+a <- data %>%
+  dplyr::group_by(subjid) %>%
+  fill(c(hivflag, gender, diagdtn, art_sdtn, progid, dobdtn), .direction = "downup") %>%
+  dplyr::ungroup()
+
+# keep only regular/scheduled visits
+a <- a %>% filter(visit<=90)
+
+# fix DOB for one participant
+a$dobdtn[a$subjid=="C01-0629"] <- as.Date("1999-02-28")
+
+# fill in missing agev using age calculated from DOB and visit date
+i <- is.na(a$agev)
+a$agev[i] <- with(a, (a$visitdt[i] - a$dobdtn[i]) / 365.25)
+
+# fill in missing hivflag using hivstat
+a$hivstat_ <- ifelse(a$hivstat==1,1,2)
+j <- is.na(a$hivflag)
+a$hivflag[j] <- with(a, a$hivstat_[j])
+
+# table(a$visit, a$hivflag)
+
+# recode nonresponse as missing
+a$hadsex[a$hadsex==-1|a$hadsex==5] <- NA
+a$alcohol[a$alcohol==8] <- NA
+a$drug[a$drug==-1] <- NA
+a$cigaret[a$cigaret==-1] <- NA
+a$sxptlnum[a$sxptlnum==-1] <- NA
+a$sxactfrq[a$sxactfrq==8] <- NA
+a$usecondr[a$usecondr<0|a$usecondr>1] <- NA
+a$usecondc[a$usecondc<0|a$usecondc>1] <- NA
+a$condrfrq[a$condrfrq<0|a$condrfrq>3] <- NA
+a$condcfrq[a$condcfrq<0|a$condcfrq>3] <- NA
+
+# create new categorical variables
+a$youth <- ifelse(a$agev<25,1,0)  # create youth flag (youth <25 years)
+
+a$esd <- ifelse(a$hadsexag<=15,1,0)   # create early sexual debut variable
+
+# collapse ever had sex and age at first sex variables
+a <-  a %>% 
+  mutate(firstsex = case_when(
+      (hadsex == 0) ~ 0, # never had sex 
+      (hadsex == 1 & hadsexag < 13) ~ 1, # had sex before age 13
+      (hadsex == 1 & (hadsexag >= 13 & hadsexag <18)) ~ 2, # had sex age 13 - 17
+      (hadsex == 1 & (hadsexag >= 18)) ~ 3, # had sex after age 18     
+      (hadsex == 1 & is.na(hadsexag)) ~ 4, # had sex missing sexual debut
+                        TRUE ~ NA)) # any other is missing
+
+# label factor variables
+a$progid <- factor(a$progid,
+                         levels = c(1,2,3,4,5),
+                         labels = c("Kayunga, Uganda", "South Rift Valley, Kenya", "Kisumu West, Kenya", 
+                                    "Mbeya, Tanzania", "Abuja & Lagos Nigeria"))
+
+a$gender <- factor(a$gender,
+                    levels = c(1,2),
+                    labels = c("Male", "Female"))
+
+a$hivflag <- factor(a$hivflag,
+                    levels = c(1,2),
+                    labels = c("PLWH", "PLWoH"))
+
+a$youth <- factor(a$youth,
+                    levels = c(0,1),
+                    labels = c("Adults (25+ years)", "Youth (15-24 years)"))
+
+a$hadsex <- factor(a$hadsex,
+                    levels = c(0,1),
+                    labels = c("No","Yes"))
+
+a$esd <- factor(a$esd,
+                    levels = c(0,1),
+                    labels = c("No","Yes"))
+
+a$firstsex <- factor(a$firstsex,
+                    levels = c(0,1,2,3,4),
+                    labels = c("Never had sex","First sex before age 13", "First sex age 13-17", 
+                             "First sex 18 or older", "Age unknown at first sex"))
+
+a$sxactfrq <- factor(a$sxactfrq,
+                     levels = c(0,1,2,3,4),
+                     labels = c("None", "1-3", "4-6", "7-10", "More than 10"))
+
+a$usecondr <- factor(a$usecondr,
+                     levels = c(0,1),
+                     labels = c("No", "Yes"))
+
+a$usecondc <- factor(a$usecondc,
+                     levels = c(0,1),
+                     labels = c("No", "Yes"))
+
+a$condrfrq <- factor(a$condrfrq,
+                     levels = c(0,1,2,3),
+                     labels = c("Never", "Sometimes", "Frequently", "All the time"))
+
+a$condcfrq <- factor(a$condcfrq,
+                     levels = c(0,1,2,3),
+                     labels = c("Never", "Sometimes", "Frequently", "All the time"))
+
+a$alcohol <- factor(a$alcohol,
+                    levels = c(0,1),
+                    labels = c("No", "Yes"))
+
+a$drug <- factor(a$drug,
+                 levels = c(0,1),
+                 labels = c("No", "Yes"))
+
+a$cigaret <- factor(a$cigaret,
+                    levels = c(0,1),
+                    labels = c("No", "Yes"))
+
+# label vars
+label(a$agev) <- "Age (years)"
+label(a$gender) <- "Sex"
+label(a$hivflag) <- "HIV status"
+label(a$progid) <- "Study site"
+label(a$hadsex) <- "Ever had sex"
+label(a$hadsexag) <- "Age at sexual debut"
+label(a$esd) <- "Early sexual debut (15 or younger)"
+label(a$firstsex) <- "Age at first sex"
+label(a$sxptlnum) <- "Number of lifetime sexual partners"
+label(a$sxactfrq) <- "Frequency of sex in last month"
+label(a$sxptrnum) <- "Number of regular partners"
+label(a$sxptcnum) <- "Number of casual partners"
+label(a$usecondr) <- "Condom used at last sex with regular partner"
+label(a$usecondc) <- "Condom used at last sex with casual partner"
+label(a$condrfrq) <- "Frequency of condom use with regular partner in last 6 months"
+label(a$condcfrq) <- "Frequency of condom use with casual partner in last 6 months"
+label(a$alcohol) <- "Consume alcohol"
+label(a$cigaret) <- "Smoke cigarettes"
+label(a$drug) <- "Use recreational drugs"
+```
+
+### Table 1. Participant characteristics at enrollment by age group
+
+```{r message=F, warning=F, echo=F}
+# subset data to visit 1
+b <- a %>% filter(visit==1)
+
+# make small data set for table 1
+c <- b %>% select("hivflag","agev","youth","gender","progid", "hadsex", "firstsex", "alcohol", "cigaret", "drug")
+
+table1 <- c %>% tbl_summary(by=youth) %>% add_p() %>% add_overall() %>% bold_p()
+  # modify_spanning_header(c("stat_1", "stat_2") ~ "**Youth**") %>% 
+  # modify_caption("**Table 1. Participant characteristics at enrollment**")
+table1
+```
+
+### Table 2. Participant characteristics at enrollment by age group among those who ever had sex
+
+```{r message=F, warning=F, echo=F}
+# subset to to visit 1 and people who ever had sex
+m <- a %>% filter(visit==1 & hadsex=="Yes")
+
+# make small data set for table 2
+n <- m %>% select("hivflag","agev","youth","gender","progid", "esd", "sxptlnum", "sxactfrq", "sxptrnum", "sxptcnum", "alcohol", "cigaret", "drug")
+
+table2 <- n %>% tbl_summary(by=youth) %>% add_p() %>% add_overall() %>% bold_p()
+  # modify_spanning_header(c("stat_1", "stat_2") ~ "**Youth**") %>% 
+  # modify_caption("**Table 2. Participant characteristics at enrollment among those who ever had sex**")
+table2
+```
+
+### Table 3a. Condom use with regular partners at enrollment visit (all)
+
+```{r message=F, warning=F, echo=F}
+# subset and reduce variable set
+reg <- a %>% filter(visit==1 & hadsex=="Yes" & sxptrnum>0) %>% select("youth", "usecondr", "condrfrq")
+
+table3 <- reg %>% tbl_summary(by=youth) %>% add_p() %>% add_overall() %>% bold_p()
+  # modify_spanning_header(c("stat_1", "stat_2") ~ "**Youth**") %>% 
+  # modify_caption("**Table 3. Condom use with regular partners at enrollment visit**")
+table3
+```
+
+### Table 3b. Condom use with regular partners at enrollment visit (PLWH)
+
+```{r message=F, warning=F, echo=F}
+# subset and reduce variable set
+reg <- a %>% filter(visit==1 & hivflag=="PLWH" & hadsex=="Yes" & sxptrnum>0) %>% select("youth", "usecondr", "condrfrq")
+
+table3 <- reg %>% tbl_summary(by=youth) %>% add_p() %>% add_overall() %>% bold_p()
+  # modify_spanning_header(c("stat_1", "stat_2") ~ "**Youth**") %>% 
+  # modify_caption("**Table 3. Condom use with regular partners at enrollment visit**")
+table3
+```
+
+### Table 3c. Condom use with regular partners at enrollment visit (PLWoH)
+
+```{r message=F, warning=F, echo=F}
+# subset and reduce variable set
+reg <- a %>% filter(visit==1 & hivflag=="PLWoH" & hadsex=="Yes" & sxptrnum>0) %>% select("youth", "usecondr", "condrfrq")
+
+table3 <- reg %>% tbl_summary(by=youth) %>% add_p() %>% add_overall() %>% bold_p()
+  # modify_spanning_header(c("stat_1", "stat_2") ~ "**Youth**") %>% 
+  # modify_caption("**Table 3. Condom use with regular partners at enrollment visit**")
+table3
+```
+
+### Table 4a. Condom use with casual partners at enrollment visit (all)
+
+```{r message=F, warning=F, echo=F}
+# subset and reduce variable set
+cas <- a %>% filter(visit==1 & hadsex=="Yes" & sxptcnum>0) %>% select("youth", "usecondc", "condcfrq")
+
+table4 <- cas %>% tbl_summary(by=youth) %>% add_p() %>% add_overall() %>% bold_p()
+  # modify_spanning_header(c("stat_1", "stat_2") ~ "**Youth**") %>% 
+  # modify_caption("**Table 4. Condom use with casual partners at enrollment visit**")
+table4
+```
+
+### Table 4b. Condom use with casual partners at enrollment visit (PLWH)
+
+```{r message=F, warning=F, echo=F}
+# subset and reduce variable set
+cas <- a %>% filter(visit==1 & hivflag=="PLWH" & hadsex=="Yes" & sxptcnum>0) %>% select("youth", "usecondc", "condcfrq")
+
+table4 <- cas %>% tbl_summary(by=youth) %>% add_p() %>% add_overall() %>% bold_p()
+  # modify_spanning_header(c("stat_1", "stat_2") ~ "**Youth**") %>% 
+  # modify_caption("**Table 4. Condom use with casual partners at enrollment visit**")
+table4
+```
+
+### Table 4c. Condom use with casual partners at enrollment visit (PLWoH)
+
+```{r message=F, warning=F, echo=F}
+# subset and reduce variable set
+cas <- a %>% filter(visit==1 & hivflag=="PLWoH" & hadsex=="Yes" & sxptcnum>0) %>% select("youth", "usecondc", "condcfrq")
+
+table4 <- cas %>% tbl_summary(by=youth) %>% add_p() %>% add_overall() %>% bold_p()
+  # modify_spanning_header(c("stat_1", "stat_2") ~ "**Youth**") %>% 
+  # modify_caption("**Table 4. Condom use with casual partners at enrollment visit**")
+table4
+```
+
+
+
+
