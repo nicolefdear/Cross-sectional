@@ -1,0 +1,962 @@
+---
+title: "Evaluating the Synergistic Effects of HIV and Malaria During Acute Malarial Episodes"
+output: html_document
+author: "Nicole Dear"
+date: "`r Sys.Date()`"
+---
+
+
+```{r setup, include = FALSE}
+
+## SETUP -----
+
+# global settings
+rstudioapi::writeRStudioPreference("data_viewer_max_columns", 1000L)  # view more columns
+
+# load packages
+library(haven)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(textclean)
+library(ggpubr)
+library(stringr)
+library(tidyverse)
+library(lubridate)
+library(dvmisc)
+library(table1)
+library(arsenal)
+library(kableExtra)
+library(data.table)
+library(lmtest)
+library(sandwich)
+library(lme4)
+library(IncidencePrevalence)
+
+# set working directory
+setwd("G:/DCAC/DCAC_PEPFAR/RV329/Data In/090124_freeze")
+
+# load data
+hivstat0 <- read_sas("hivstat0.sas7bdat")
+names(hivstat0) <- tolower(names(hivstat0))
+
+subjq_dm0 <- read_sas("subjq_dm0.sas7bdat")
+names(subjq_dm0) <- tolower(names(subjq_dm0))
+
+v_load0 <- read_sas("v_load0.sas7bdat")
+names(v_load0) <- tolower(names(v_load0))
+
+lymph0 <- read_sas("lymph0.sas7bdat")
+names(lymph0) <- tolower(names(lymph0))
+
+vital_pe0 <- read_sas("vital_pe0.sas7bdat")
+names(vital_pe0) <- tolower(names(vital_pe0))
+
+hema0 <- read_sas("hema0.sas7bdat")
+names(hema0) <- tolower(names(hema0))
+
+chem0 <- read_sas("chem0.sas7bdat")
+names(chem0) <- tolower(names(chem0))
+
+febrile0 <- read_sas("febrile0.sas7bdat")
+names(febrile0) <- tolower(names(febrile0))
+
+arvcode0 <- read_sas("arvcode0.sas7bdat")
+names(arvcode0) <- tolower(names(arvcode0))
+
+medrx20 <- read_sas("medrx20.sas7bdat")
+names(medrx20) <- tolower(names(medrx20))
+
+medrx30 <- read_sas("medrx30.sas7bdat")
+names(medrx30) <- tolower(names(medrx30))
+
+cmc0 <- read_sas("cmc0.sas7bdat")
+names(cmc0) <- tolower(names(cmc0))
+
+microbio0 <- read_sas("microbio0.sas7bdat")
+names(microbio0) <- tolower(names(microbio0))
+
+serology0 <- read_sas("serology0.sas7bdat")
+names(serology0) <- tolower(names(serology0))
+
+hosp0 <- read_sas("hosp0.sas7bdat")
+names(hosp0) <- tolower(names(hosp0))
+
+```
+
+
+```{r, include = FALSE}
+
+## DATA CLEANING -----
+
+hivstat1 <- hivstat0 %>%
+  select(subjid, visit, visitdt, gender, age, dobdtn, hivflag, hivstat, progid, diagdtn, art_sdtn, dur_art, dur_hiv) %>%
+  filter(visit<90) %>% 
+  # remove participants with duplicate visits with wrong date
+  filter(!(subjid=="A01-0382" & visit==17 & visitdt=='2023-11-23')) %>%
+  filter(!(subjid=="C01-0064" & visit==2 & visitdt=='2023-10-25')) %>%
+  filter(!(subjid=="C01-0067" & visit==2 & visitdt=='2023-11-15')) %>%
+  filter(!(subjid=="C01-0139" & visit==9 & visitdt=='2023-09-20')) %>%
+  filter(!(subjid=="D01-0022" & visit==13 & visitdt=='2023-10-17')) %>%
+  filter(!(subjid=="D01-0226" & visit==15 & visitdt=='2023-10-18')) %>%
+  filter(!(subjid=="D01-0277" & visit==1 & visitdt=='2023-12-07'))
+
+hivstat1$visit[hivstat1$subjid=="C01-0044" & hivstat1$visit==19 & hivstat1$visitdt=='2023-10-31'] <- 20
+hivstat1$visit[hivstat1$subjid=="C01-0116" & hivstat1$visit==18 & hivstat1$visitdt=='2023-08-03'] <- 19
+hivstat1$visit[hivstat1$subjid=="D01-0405" & hivstat1$visit==16 & hivstat1$visitdt=='2022-10-26'] <- 14
+hivstat1$visit[hivstat1$subjid=="D02-0008" & hivstat1$visit==12 & hivstat1$visitdt=='2023-10-16'] <- 13
+
+hivstat1 <- hivstat1 %>%
+  distinct(subjid, visit, .keep_all = TRUE)
+
+# check for dups by subjid and visit
+duptest1 <- hivstat1 %>%
+  group_by(subjid, visit) %>%
+  mutate(dupe = n()>1)
+table(duptest1$dupe)
+
+subjq_dm1 <- subjq_dm0 %>%
+  filter(visit<90) %>% 
+  # remove participants with duplicate visits with wrong date
+  filter(!(subjid=="D01-0045" & visit==18 & visitdt=='2023-01-25')) %>%
+  filter(!(subjid=="D01-0555" & visit==3 & visitdt=='2023-03-01')) %>% 
+  distinct(subjid, visit, .keep_all = TRUE) %>% 
+  select(subjid, visit, educat, eductxt, employed, hhincome, hcurrtyp, hcurrtxt, hholdur)
+  
+# check for dups by subjid and visit
+duptest2 <- subjq_dm1 %>%
+  group_by(subjid, visit) %>%
+  mutate(dupe = n()>1)
+table(duptest2$dupe)
+
+v_load1 <- v_load0 %>%
+  select(subjid, visit, visitdt, sequence, drawper, drawdt, vl_circ, vlcopy, nodetect) %>%
+  # include only rows with draw at study visit
+  filter(drawper==1 & visit<90) %>%
+  # remove duplicate rows (for D02-0124, this row with visit=2 is a dup of visit 7
+  # and for B01-0033, this row is a dup where the other visit 7 row has non-missing vlcopy)
+  filter(!(subjid=="B01-0033" & visit==7 & is.na(vlcopy))) %>%
+  filter(!(subjid=="D02-0124" & visitdt=="2022-08-19" & visit==2)) %>%
+  filter(!(subjid=="D01-0022" & visitdt=="2023-10-17" & visit==13)) %>%
+  filter(!(subjid=="D01-0277" & visitdt=="2023-12-07" & visit==1)) %>%
+  # remove rows that have same subjid, visit, and vlcopy
+  distinct(subjid, visit, vlcopy, .keep_all = TRUE) %>%
+  # variable to check if visit values are repeated within a subjid
+  group_by(subjid, visit) %>%
+  mutate(dupflag = if_else(n()>1, 1, 0)) %>%
+  # remove rows from same visit with sequence greater than 1
+  filter(!(dupflag==1 & sequence!=1)) %>% 
+  # clean vl variable
+  mutate(vl_clean = case_when(nodetect==1 & is.na(vlcopy) ~ "undetectable",
+                              vl_circ==1 ~ paste0("<", vlcopy),
+                              vl_circ==2 | is.na(vl_circ) ~ as.character(vlcopy),
+                              vl_circ==3 ~ paste0(">", vlcopy))) %>% 
+  mutate(vls1000 = case_when(nodetect==1 | vlcopy<1000 ~ 1,
+                            vlcopy>=1000 ~ 0,
+                            .default = NA)) %>% 
+  mutate(vls200 = case_when(nodetect==1 | vlcopy<200 ~ 1,
+                            vlcopy>=200 ~ 0,
+                            .default = NA))
+
+v_load1$visit[v_load1$subjid=="D01-0405" & v_load1$visit==16 & v_load1$visitdt=='2022-10-26'] <- 14
+v_load1$visit[v_load1$subjid=="D02-0008" & v_load1$visit==12 & v_load1$visitdt=='2023-10-16'] <- 13
+
+# check for dups by subjid and visit
+duptest3 <- v_load1 %>%
+  group_by(subjid, visit) %>%
+  mutate(dupe = n()>1)
+table(duptest3$dupe)
+
+lymph1 <- lymph0 %>%
+  select(subjid, visit, visitdt, sequence, drawper, drawdt, cd3_4_n) %>%
+  # include only rows with draw at study visit
+  filter(drawper==1 & visit<90 & !is.na(cd3_4_n)) %>% 
+  # drop rows with incorrect visit #s/dates
+  filter(!(subjid=="A01-0023" & visitdt=="2022-11-29" & visit==2)) %>%
+  filter(!(subjid=="A01-0024" & visitdt=="2022-11-08" & visit==2)) %>%
+  filter(!(subjid=="A01-0030" & visitdt=="2022-11-29" & visit==2)) %>%
+  filter(!(subjid=="A01-0032" & visitdt=="2022-11-21" & visit==2)) %>%
+  filter(!(subjid=="A01-0036" & visitdt=="2022-12-12" & visit==2)) %>%
+  filter(!(subjid=="A01-0037" & visitdt=="2022-11-01" & visit==2)) %>%
+  filter(!(subjid=="A01-0042" & visitdt=="2022-11-15" & visit==2)) %>%
+  filter(!(subjid=="A01-0044" & visitdt=="2022-11-16" & visit==2)) %>%
+  filter(!(subjid=="A01-0047" & visitdt=="2022-11-15" & visit==2)) %>%
+  filter(!(subjid=="A01-0048" & visitdt=="2022-12-05" & visit==2)) %>%
+  filter(!(subjid=="A01-0051" & visitdt=="2022-11-15" & visit==2)) %>%
+  filter(!(subjid=="A01-0071" & visitdt=="2022-11-01" & visit==2)) %>%
+  filter(!(subjid=="A01-0081" & visitdt=="2022-12-01" & visit==2)) %>%
+  filter(!(subjid=="A01-0087" & visitdt=="2022-11-28" & visit==2)) %>%
+  filter(!(subjid=="A01-0089" & visitdt=="2022-11-28" & visit==2)) %>%
+  filter(!(subjid=="A01-0090" & visitdt=="2022-11-30" & visit==2)) %>%
+  filter(!(subjid=="A01-0093" & visitdt=="2022-12-01" & visit==2)) %>%
+  filter(!(subjid=="A01-0094" & visitdt=="2022-12-12" & visit==2)) %>%
+  filter(!(subjid=="A01-0096" & visitdt=="2022-12-06" & visit==2)) %>%
+  filter(!(subjid=="A01-0099" & visitdt=="2022-12-14" & visit==2)) %>%
+  filter(!(subjid=="A01-0107" & visitdt=="2023-01-04" & visit==2)) %>%
+  filter(!(subjid=="A01-0125" & visitdt=="2023-01-18" & visit==2)) %>%
+  filter(!(subjid=="C01-0139" & visitdt=="2023-09-20" & visit==9)) %>%
+  filter(!(subjid=="D01-0022" & visitdt=="2023-10-17" & visit==13)) %>%
+  filter(!(subjid=="D01-0058" & visitdt=="2023-08-24" & visit==10)) %>%
+  filter(!(subjid=="D01-0277" & visitdt=="2023-12-07" & visit==1)) %>%
+  # variable to check if visit values are repeated within a subjid
+  group_by(subjid, visit) %>%
+  mutate(dupflag = if_else(n()>1, 1, 0)) %>%
+  # remove rows from same visit with sequence greater than 1
+  filter(!(dupflag==1 & sequence!=1)) %>% 
+  # create categorical version of CD4 count
+  mutate(cd4cat = case_when(cd3_4_n<250 ~ 1,
+                            cd3_4_n>=250 & cd3_4_n<500 ~ 2,
+                            cd3_4_n>=500 ~ 3,
+                            .default = NA))
+
+lymph1$visit[lymph1$subjid=="C01-0044" & lymph1$visit==19 & lymph1$visitdt=='2023-10-31'] <- 20
+lymph1$visit[lymph1$subjid=="D01-0405" & lymph1$visit==16 & lymph1$visitdt=='2022-10-26'] <- 14
+lymph1$visit[lymph1$subjid=="D02-0008" & lymph1$visit==12 & lymph1$visitdt=='2023-10-16'] <- 13
+
+lymph1 <- lymph1 %>% 
+  distinct(subjid, visit, .keep_all = TRUE)
+
+# check for dups by subjid and visit
+duptest4 <- lymph1 %>%
+  group_by(subjid, visit) %>%
+  mutate(dupe = n()>1)
+table(duptest4$dupe)
+
+vital_pe1 <- vital_pe0 %>%
+  select(subjid, visit, visitdt, sequence, temp, pulse, resp, sysbp, diabp) %>% 
+  filter(visit<90) %>% 
+  filter(!(subjid=="D01-0022" & visitdt=="2023-10-17" & visit==13)) %>%
+  filter(!(subjid=="D01-0277" & visitdt=="2023-12-07" & visit==1)) %>%
+  filter(!(subjid=="D02-0117" & visitdt=="2022-11-17" & visit==3))
+
+vital_pe1$visit[vital_pe1$subjid=="C01-0044" & vital_pe1$visit==19 & vital_pe1$visitdt=='2023-10-31'] <- 20
+vital_pe1$visit[vital_pe1$subjid=="C01-0116" & vital_pe1$visit==18 & vital_pe1$visitdt=='2023-08-03'] <- 19
+vital_pe1$visit[vital_pe1$subjid=="C01-0139" & vital_pe1$visit==9 & vital_pe1$visitdt=='2023-09-20'] <- 19
+vital_pe1$visit[vital_pe1$subjid=="D01-0405" & vital_pe1$visit==16 & vital_pe1$visitdt=='2023-10-26'] <- 14
+vital_pe1$visit[vital_pe1$subjid=="D02-0008" & vital_pe1$visit==12 & vital_pe1$visitdt=='2023-10-16'] <- 13
+
+vital_pe1 <- vital_pe1 %>% 
+  distinct(subjid, visit, .keep_all = TRUE) %>% 
+  select(subjid, visit, sequence, temp, pulse, resp, sysbp, diabp)
+
+# check for dups by subjid and visit
+duptest5 <- vital_pe1 %>%
+  group_by(subjid, visit) %>%
+  mutate(dupe = n()>1)
+table(duptest5$dupe)
+
+hema1 <- hema0 %>%
+  select(subjid, visit, visitdt, sequence, drawper, hemog, wbc, platelet) %>% 
+  filter(visit<90) %>%
+  filter(!(subjid=="D01-0022" & visitdt=="2023-10-17" & visit==13)) %>%
+  filter(!(subjid=="D01-0255" & visitdt=="2022-11-24" & visit==4)) %>%
+  filter(!(subjid=="D01-0277" & visitdt=="2023-12-07" & visit==1)) %>%
+  # variable to check if visit values are repeated within a subjid
+  group_by(subjid, visit) %>%
+  mutate(dupflag = if_else(n()>1, 1, 0)) %>%
+  # remove rows from same visit with sequence greater than 1
+  filter(!(dupflag==1 & sequence!=1))
+
+hema1$visit[hema1$subjid=="B04-0171" & hema1$visit==3 & hema1$visitdt=='2024-02-19'] <- 4
+hema1$visit[hema1$subjid=="C01-0044" & hema1$visit==19 & hema1$visitdt=='2023-10-31'] <- 20
+hema1$visit[hema1$subjid=="D01-0405" & hema1$visit==16 & hema1$visitdt=='2023-10-25'] <- 14
+hema1$visit[hema1$subjid=="D02-0008" & hema1$visit==12 & hema1$visitdt=='2023-10-16'] <- 13
+
+hema1 <- hema1 %>% 
+  distinct(subjid, visit, .keep_all = TRUE) %>% 
+  select(subjid, visit, sequence, drawper, hemog, wbc, platelet)
+
+# check for dups by subjid and visit
+duptest6 <- hema1 %>%
+  group_by(subjid, visit) %>%
+  mutate(dupe = n()>1)
+table(duptest6$dupe)
+
+chem1 <- chem0 %>%
+  select(subjid, visit, visitdt, sequence, drawper, altsgpt, tbili, dbili, creat) %>%
+  filter(visit<90) %>%
+  filter(!(subjid=="D01-0022" & visitdt=="2023-10-17" & visit==13)) %>%
+  filter(!(subjid=="D01-0128" & visitdt=="2023-03-24" & visit==17)) %>%
+  # variable to check if visit values are repeated within a subjid
+  group_by(subjid, visit) %>%
+  mutate(dupflag = if_else(n()>1, 1, 0)) %>%
+  # remove rows from same visit with sequence greater than 1
+  filter(!(dupflag==1 & sequence!=1)) %>% 
+  filter(!is.na(creat)) %>% 
+  distinct(subjid, visit, .keep_all = TRUE)
+
+chem1 <- chem1 %>% 
+  select(subjid, visit, sequence, drawper, altsgpt, tbili, dbili, creat)
+
+# check for dups by subjid and visit
+duptest7 <- chem1 %>%
+  group_by(subjid, visit) %>%
+  mutate(dupe = n()>1)
+table(duptest7$dupe)
+
+febrile1 <- febrile0 %>%
+  select(subjid, visit, visitdt, sequence, oraltemp, mal_tx, smear, 
+         smear_a, smear_b, smear_c,  smear_d, smear_e, smears_a, smears_b, 
+         smears_c, smears_d, rdt, rdtname, dxgiven, tx_a, tx_b, tx_c, tx_d, 
+         tx_e, tx_f, tx_g, tx_h, tx_i, tx_j, tx_z, oth8_txt) %>%
+  # convert unk/no response values to missing
+  mutate(oraltemp = na_if(oraltemp, -1)) %>% 
+  # convert not done response values to missing
+  mutate(smear = na_if(smear, 6)) %>% 
+  mutate(rdt = na_if(rdt, 6)) %>% 
+  distinct(subjid, visit, visitdt, .keep_all = TRUE)
+
+# check for dups by subjid and visit
+duptest8 <- febrile1 %>%
+  group_by(subjid, visit, visitdt) %>%
+  mutate(dupe = n()>1)
+table(duptest8$dupe)
+
+# ART and other medication data
+arvcode1 <- arvcode0 %>%
+  select(subjid, visit, medicat, arv_code, startdtcn, astartdtcn) %>%
+  filter(visit<90)
+
+# check for dups by subjid and visit
+duptest9 <- arvcode1 %>%
+  group_by(subjid, visit) %>%
+  mutate(dupe = n()>1)
+table(duptest9$dupe)
+
+medrx21 <- medrx20 %>%
+  select(subjid, visit, pcpmed) %>% 
+  #create flag for #1: Co-Trimoxazole (Septrin)
+  mutate(ctx_med2 = if_else(pcpmed==1, 1, 0)) %>% 
+  filter(visit<90 & ctx_med2==1) %>% 
+  distinct(subjid, visit, .keep_all = TRUE)
+
+# check for dups by subjid and visit
+duptest10 <- medrx21 %>%
+  group_by(subjid, visit) %>%
+  mutate(dupe = n()>1)
+table(duptest10$dupe)
+
+medrx31 <- medrx30 %>%
+  select(subjid, visit, md_code, md_name, md_ind, mnewmed, mdongo) %>% 
+  # create flag for ICD code E18: Co-Trimoxazole
+  mutate(ctx_med3 = if_else(grepl("E18", md_code), 1, 0)) %>% 
+  filter(visit<90 & ctx_med3==1) %>% 
+  distinct(subjid, visit, .keep_all = TRUE)
+
+# check for dups by subjid and visit
+duptest11 <- medrx31 %>%
+  group_by(subjid, visit) %>%
+  mutate(dupe = n()>1)
+table(duptest11$dupe)
+
+# hospitalizations
+hosp1 <- hosp0 %>% 
+  select(subjid, visit, visitdt, dx_a, a_txt, dx_b, b_txt, dx_c, c_txt, icu_care, hospvdt, disdtn, tx_out_a, tx_out_b, tx_out_c) %>% 
+  mutate(malaria_hosp = if_else(grepl("B54|B50.8|B50.0|B50.9", dx_a) | grepl("B54|B50.8|B50.0|B50.9", dx_b) |
+                                  grepl("B54|B50.8|B50.0|B50.9", dx_c), 1, 0))
+
+# pull in exclusion criteria: dx for pneumonia, covid, TB or cryptococcal antigen
+microbio1 <- microbio0 %>% 
+  select(subjid, visit, visitdt, tbxpert) %>% 
+  filter(tbxpert==1)
+
+serology1 <- serology0 %>% 
+  select(subjid, visit, visitdt, serumcry) %>% 
+  filter(serumcry==1)
+
+cmc1 <- cmc0 %>% 
+  select(subjid, visit, visitdt, dx) %>% 
+  # create flag for covid dx
+  mutate(covid = if_else(grepl("U07.1", dx), 1, 0)) %>% 
+  # create flag for pneumonia dx
+  mutate(pneumonia = if_else(grepl("W43.3", dx) | grepl("J15.9", dx), 1, 0)) %>% 
+  filter(covid==1 | pneumonia==1)
+
+exclude <- microbio1 %>%
+  full_join(serology1, by = c("subjid", "visit", "visitdt")) %>%
+  full_join(cmc1, by = c("subjid", "visit", "visitdt")) %>%
+  mutate(exclude = if_else(tbxpert==1 | serumcry==1 | covid==1 | pneumonia==1, 1, 0)) %>% 
+  distinct(subjid, visit, visitdt, .keep_all = TRUE)
+
+```
+
+
+```{r, include = FALSE}
+
+## MERGE DATA -----
+
+data0 <- hivstat1 %>%
+  full_join(subjq_dm1, by = c("subjid", "visit")) %>% 
+  full_join(v_load1, by = c("subjid", "visit")) %>% 
+  full_join(lymph1, by = c("subjid", "visit")) %>% 
+  full_join(vital_pe1, by = c("subjid", "visit")) %>% 
+  full_join(hema1, by = c("subjid", "visit")) %>% 
+  full_join(chem1, by = c("subjid", "visit")) %>% 
+  full_join(arvcode1, by = c("subjid", "visit")) %>%
+  full_join(medrx21, by = c("subjid", "visit")) %>%
+  full_join(medrx31, by = c("subjid", "visit")) %>% 
+  full_join(febrile1, by = c("subjid", "visit")) %>% 
+  mutate(visitdt = if_else(!is.na(visitdt.x), visitdt.x, visitdt.y, NA)) %>% 
+  mutate(visitdt = if_else(!is.na(visitdt), visitdt, visitdt.x.x, NA)) %>% 
+  mutate(visitdt = if_else(!is.na(visitdt), visitdt, visitdt.y.y, NA)) %>% 
+  full_join(exclude, by = c("subjid", "visit", "visitdt")) %>%
+  full_join(hosp1, by = c("subjid", "visit", "visitdt")) %>% 
+  arrange(subjid, visitdt)
+
+```
+
+
+```{r, include = FALSE}
+
+## ADDITIONAL DATA CLEANING ON COMBINED DATASET -----
+
+# code free text responses for 'other' education
+educat1 <- c("1", "ONE", "2", "TWO", "PRIMARY")
+educat3 <- c("3", "FOUR", "SEVEN", "8", "EIGHT", "SECONDARY")
+educat5 <- c("COLLAGE", "COLLEGE", "UNIVERSITY")
+educat6 <- c("POST GRADUATE")
+
+data0$flag_educat1 <- ifelse(grepl(paste(educat1, collapse='|'), data0$eductxt), 1, 0)
+data0$flag_educat3 <- ifelse(grepl(paste(educat3, collapse='|'), data0$eductxt), 1, 0)
+data0$flag_educat5 <- ifelse(grepl(paste(educat5, collapse='|'), data0$eductxt), 1, 0)
+data0$flag_educat6 <- ifelse(grepl(paste(educat6, collapse='|'), data0$eductxt), 1, 0)
+
+# create new variables and convert to factor
+data1 <- data0 %>%
+  
+  # demographics
+  mutate(gender = factor(gender,
+                   levels = c(1,2),
+                   labels = c("Male", "Female"))) %>%
+  mutate(hivflag = factor(hivflag,
+                    levels = c(1,2),
+                    labels = c("PLWH", "PLWoH"))) %>% 
+  mutate(hivstat = factor(hivstat,
+                    levels = c(1,2),
+                    labels = c("PLWH", "PLWoH"))) %>%
+  mutate(education = case_when(educat==0 | educat==1 | (educat==90 & flag_educat1==1) ~ 0,
+                               educat==2 | educat==3 | (educat==90 & flag_educat3==1) ~ 1,
+                               educat>3 | (educat==90 & flag_educat5==1) | 
+                                 (educat==90 & flag_educat6==1) ~ 2,
+                               .default = NA)) %>% 
+  mutate(education = factor(education,
+                          levels = c(0,1,2),
+                          labels = c("None or some primary", "Primary or some secondary", "Secondary and above"))) %>%
+  mutate(country = case_when(progid==1 ~ 1,
+                             progid==2 | progid==3 ~ 2,
+                             progid==4 ~ 3,
+                             progid==5 ~ 4,
+                             .default = NA)) %>%
+  mutate(progid = factor(progid,
+                   levels = c(1,2,3,4,5),
+                   labels = c("Kayunga, Uganda", "South Rift Valley, Kenya", 
+                              "Kisumu West, Kenya", "Mbeya, Tanzania", 
+                              "Abuja & Lagos Nigeria"))) %>%
+  mutate(country = factor(country,
+                          levels = c(1,2,3,4),
+                          labels = c("Uganda", "Kenya", "Tanzania", "Nigeria"))) %>% 
+  mutate(hholdur = factor(hholdur,
+                          levels = c(1,2,3),
+                          labels = c("Urban", "Peri-urban", "Rural"))) %>%
+  
+  # create SES variable (quartiles of income by country)
+  mutate(income_quartiles = create_qgroups(hhincome, groups = 4, strata = country)) %>% 
+  
+  # HIV-related variables
+  mutate(vls1000 = factor(vls1000,
+                            levels = c(0,1),
+                            labels = c("VL>=1000 c/ml", "VL<1000 c/ml"))) %>%
+  mutate(vls200 = factor(vls200,
+                            levels = c(0,1),
+                            labels = c("VL>=200 c/ml", "VL<200 c/ml"))) %>%
+  mutate(cd4cat = factor(cd4cat,
+                            levels = c(1,2,3),
+                            labels = c("<250 cells/mm3", "250 to <500 cells/mm3", ">=500 cells/mm3"))) %>%
+  mutate(ctx = case_when(ctx_med2==1 | ctx_med3==1 ~ 1,
+                         .default = 0)) %>% 
+  mutate(ctx = factor(ctx,
+                      levels = c(0,1),
+                      labels = c("No CTX", "CTX"))) %>% 
+  
+  # malaria-related variables
+  mutate(oraltemp = factor(oraltemp,
+                      levels = c(0,1),
+                      labels = c("Temperature < 99.5F (37.5C)", "Temperature ≥ 99.5F (37.5C)"))) %>%
+  mutate(any_trt_mal = if_else(tx_a==1 | tx_b==1 | tx_c==1 | tx_d==1 | tx_e==1 | 
+                                 tx_f==1 | tx_g==1 | tx_h==1 | tx_i==1 |
+                                 tx_j==1 | tx_z==1, 1, 0)) %>% 
+  mutate(any_trt_mal = factor(any_trt_mal,
+                      levels = c(0,1),
+                      labels = c("No treatment given", "Treatment given"))) %>%
+  mutate(malariadx = case_when(grepl("B50.0", dxgiven, ignore.case=TRUE) ~ 1,
+                            grepl("B50.8", dxgiven, ignore.case=TRUE) ~ 2,
+                            grepl("B50.9", dxgiven, ignore.case=TRUE) ~ 3,
+                            .default = NA)) %>% 
+  mutate(malariadx = factor(malariadx,
+                            levels = c(1,2,3),
+                            labels = c("Cerebral malaria", "Severe malaria, non-cerebral", "Uncomplicated malaria"))) %>%
+  mutate(malariadx2 = case_when(grepl("B50.0|B50.8", dxgiven, ignore.case=TRUE) ~ 1,
+                            grepl("B50.9", dxgiven, ignore.case=TRUE) ~ 0,
+                            .default = NA)) %>% 
+  mutate(malariadx2 = factor(malariadx2,
+                            levels = c(0, 1),
+                            labels = c("Uncomplicated malaria", "Complicated malaria"))) %>%
+  
+    # replace missing with 'not hospitalized'
+  mutate(malaria_hosp = replace_na(malaria_hosp, 0)) %>%
+  mutate(malaria_hosp = factor(malaria_hosp,
+                      levels = c(0,1),
+                      labels = c("Not hospitalized", "Hospitalized"))) %>%
+
+  # type of parasite
+  # mutate(species = case_when(smear_a==1 ~ 1,
+  #                              smear_b==1 ~ 2,
+  #                              smear_c==1 ~ 3,
+  #                              smear_d==1 ~ 4,
+  #                              smear_e==1 ~ 5,
+  #                              .default = NA)) %>% 
+  # mutate(species = factor(species,
+  #                     levels = c(1,2,3,4,5),
+  #                     labels = c("Malariae", "Falciparum", "Ovale", "Vivax", "Other/unknown"))) %>%
+  mutate(species2 = case_when(smear_b==1 ~ 1,
+                               smear_c==1 ~ 2,
+                               smear_e==1 ~ 3,
+                               .default = NA)) %>% 
+  mutate(species2 = factor(species2,
+                      levels = c(1,2,3),
+                      labels = c("Falciparum", "Ovale", "Other/unknown"))) %>%
+  mutate(smear_a = factor(smear_a,
+                      levels = c(0,1),
+                      labels = c("No Malariae", "Malariae"))) %>%
+  mutate(smear_b = factor(smear_b,
+                      levels = c(0,1),
+                      labels = c("No Falciparum", "Falciparum"))) %>%
+  mutate(smear_c = factor(smear_c,
+                      levels = c(0,1),
+                      labels = c("No Ovale", "Ovale"))) %>%
+  mutate(smear_d = factor(smear_d,
+                      levels = c(0,1),
+                      labels = c("No Vivax", "Vivax"))) %>%
+  mutate(smear_e = factor(smear_e,
+                      levels = c(0,1),
+                      labels = c("No Other/unknown", "Other/unknown"))) %>%
+  
+  # flag for annual visits
+  mutate(annual = if_else(visit %% 2 == 0 | visit>90, 0, 1)) %>%
+  
+  # fill in values for variables collected at enrollment/added in later amendment
+  group_by(subjid) %>%
+  fill(c(hivflag, age, gender, progid, country, dobdtn, hholdur, education, income_quartiles), .direction = "downup") %>%
+  fill(c(diagdtn, art_sdtn), .direction = "down") %>%
+  ungroup() %>%
+  
+  # calculate age at visit
+  mutate(agev = as.numeric(difftime(visitdt, dobdtn) / 365.25)) %>%
+  
+  # remove anyone with missing HIV status
+  filter(!(is.na(hivflag)))
+
+# fill in duration since HIV dx and duration on ART if missing
+j <- is.na(data1$dur_hiv)
+data1$dur_hiv[j] <- difftime(data1$visitdt[j], data1$diagdtn[j], units = "days") / 365.25
+
+k <- is.na(data1$dur_art)
+data1$dur_art[k] <- difftime(data1$visitdt[k], data1$art_sdtn[k], units = "days") / 365.25
+
+```
+
+
+```{r, echo = FALSE}
+
+## ART DATA CLEANING -----
+
+# pull in names of ART corresponding to medication codes
+data1$arv_name <- ""
+data1$arv_name[data1$arv_code=="J12"] <- "Dolutegravir"
+data1$arv_name[data1$arv_code=="J12,J54"] <- "Dolutegravir + Abacavir + Lamivudine"
+data1$arv_name[data1$arv_code=="J17"] <- "Efavirenz + Emtricitabine + Tenofovir"
+data1$arv_name[data1$arv_code=="J19"] <- "Emtricitabine"
+data1$arv_name[data1$arv_code=="J19,J34"] <- "Emtricitabine + Rilpivirine"
+data1$arv_name[data1$arv_code=="J25"] <- "Lamivudine + Nevirapine + Zidovudine"
+data1$arv_name[data1$arv_code=="J26"] <- "Lamivudine + Zidovudine"
+data1$arv_name[data1$arv_code=="J26,J42"] <- "Tenofovir + Lamivudine + Zidovudine"
+data1$arv_name[data1$arv_code=="J28,J12"] <- "Dolutegravir + Lopinavir + Ritonavir"
+data1$arv_name[data1$arv_code=="J29,J42"] <- "Tenofovir + Lamivudine + Lopinavir + Ritonavir"
+data1$arv_name[data1$arv_code=="J34"] <- "Rilpivirine"
+data1$arv_name[data1$arv_code=="J34,J19"] <- "Emtricitabine + Rilpivirine"
+data1$arv_name[data1$arv_code=="J42"] <- "Tenofovir + Lamivudine"
+data1$arv_name[data1$arv_code=="J43"] <- "Tenofovir + Lamivudine + Efavirenz"
+data1$arv_name[data1$arv_code=="J43,J42"] <- "Tenofovir + Lamivudine + Efavirenz"
+data1$arv_name[data1$arv_code=="J50"] <- "Tenofovir + Emtricitabine"
+data1$arv_name[data1$arv_code=="J54"] <- "Abacavir + Lamivudine"
+data1$arv_name[data1$arv_code=="J55"] <- "Tenofovir + Lamivudine + Dolutegravir"
+data1$arv_name[data1$arv_code=="J56"] <- "Tenofovir + Lamivudine + Efavirenz"
+data1$arv_name[data1$arv_code=="J57"] <- "Abacair + Lamivudine + Dolutegravir"
+data1$arv_name[data1$arv_code=="J57,J12"] <- "Abacair + Lamivudine + Dolutegravir"
+
+# clean up medicat variable
+data1$medicat_cl <- ""
+data1$medicat_cl[data1$medicat=="10. Atazanazir(ATZ) 300mg"] <- "Atazanazir"
+data1$medicat_cl[data1$medicat=="11. Atazanazir/Ritonavir 300mg/100mg"] <- "Atazanazir/Ritonavir"
+data1$medicat_cl[data1$medicat=="11. Atazanazir/Ritonavir 300mg/100mg ; 9. Nevirapine(NVP) 200mg"] <- "Atazanazir/Ritonavir + Nevirapine"
+data1$medicat_cl[data1$medicat=="12. Lopinavir/Ritonavir 400mg/100mg"] <- "Lopinavir/Ritonavir"
+data1$medicat_cl[data1$medicat=="12. Lopinavir/Ritonavir 400mg/100mg ; 6. Tenofoivr(TDF) 300mg ; 4. Lamivudine(3TC) 300mg ; 12. Lopinavir/Ritonavir 400mg/100mg"] <- "Tenofovir + Lamivudine + Lopinavir/Ritonavir"
+data1$medicat_cl[data1$medicat=="14. Emtricitabine(FTC) 200mg ; 6. Tenofoivr(TDF) 300mg"] <- "Tenofovir + Emtricitabine"
+data1$medicat_cl[data1$medicat=="15. Lamivudine/Nevirapine/Zidovudine"] <- "Lamivudine + Nevirapine + Zidovudine"
+data1$medicat_cl[data1$medicat=="16. Lamivudine/Zidovudine 150/300mg"] <- "Lamivudine + Zidovudine"
+data1$medicat_cl[data1$medicat=="16. Lamivudine/Zidovudine 150/300mg ; 10. Atazanazir(ATZ) 300mg"] <- "Lamivudine + Zidovudine + Atazanazir"
+data1$medicat_cl[data1$medicat=="16. Lamivudine/Zidovudine 150/300mg ; 11. Atazanazir/Ritonavir 300mg/100mg"] <- "Lamivudine + Zidovudine + Atazanazir/Ritonavir"
+data1$medicat_cl[data1$medicat=="16. Lamivudine/Zidovudine 150/300mg ; 11. Atazanazir/Ritonavir 300mg/100mg ; 6. Tenofoivr(TDF) 300mg"] <- "Lamivudine + Zidovudine + Atazanazir/Ritonavir + Tenofovir"
+data1$medicat_cl[data1$medicat=="16. Lamivudine/Zidovudine 150/300mg ; 12. Lopinavir/Ritonavir 400mg/100mg"] <- "Lamivudine + Zidovudine + Lopinavir/Ritonavir"
+data1$medicat_cl[data1$medicat=="16. Lamivudine/Zidovudine 150/300mg ; 8. Efavirenz(EFV) 600mg"] <- "Lamivudine + Zidovudine + Efavirenz"
+data1$medicat_cl[data1$medicat=="17. Tenofovir/Lamivudine 300/300mg"] <- "Tenofovir + Lamivudine"
+data1$medicat_cl[data1$medicat=="17. Tenofovir/Lamivudine 300/300mg ; 10. Atazanazir(ATZ) 300mg"] <- "Tenofovir + Lamivudine + Atazanazir"
+data1$medicat_cl[data1$medicat=="17. Tenofovir/Lamivudine 300/300mg ; 11. Atazanazir/Ritonavir 300mg/100mg"] <- "Tenofovir + Lamivudine + Atazanazir/Ritonavir"
+data1$medicat_cl[data1$medicat=="17. Tenofovir/Lamivudine 300/300mg ; 12. Lopinavir/Ritonavir 400mg/100mg"] <- "Tenofovir + Lamivudine + Lopinavir/Ritonavir"
+data1$medicat_cl[data1$medicat=="17. Tenofovir/Lamivudine 300/300mg ; 15. Lamivudine/Nevirapine/Zidovudine"] <- "Tenofovir + Lamivudine + Nevirapine + Zidovudine"
+data1$medicat_cl[data1$medicat=="17. Tenofovir/Lamivudine 300/300mg ; 9. Nevirapine(NVP) 200mg"] <- "Tenofovir + Lamivudine + Nevirapine"
+data1$medicat_cl[data1$medicat=="18. Tenofovir/Lamivudine/Efavirenz 3"] <- "Tenofovir + Lamivudine + Efavirenz"
+data1$medicat_cl[data1$medicat=="19"] <- "Tenofovir + Lamivudine + Dolutegravir"
+data1$medicat_cl[data1$medicat=="19. Tenofovir/Lamivudine/Dolutegravi"] <- "Tenofovir + Lamivudine + Dolutegravir"
+data1$medicat_cl[data1$medicat=="19 ; 17. Tenofovir/Lamivudine 300/300mg"] <- "Tenofovir + Lamivudine + Efavirenz + Dolutegravir"
+data1$medicat_cl[data1$medicat=="19 ; 18. Tenofovir/Lamivudine/Efavirenz 3"] <- "Tenofovir + Lamivudine + Dolutegravir"
+data1$medicat_cl[data1$medicat=="19 ; 19"] <- "Tenofovir + Lamivudine + Dolutegravir"
+data1$medicat_cl[data1$medicat=="20. Tenofovir/Lamivudine/Efavirenz 3"] <- "Tenofovir + Lamivudine + Efavirenz"
+data1$medicat_cl[data1$medicat=="20"] <- "Tenofovir + Lamivudine + Efavirenz"
+data1$medicat_cl[data1$medicat=="21"] <- "Abacavir + Lamivudine + Dolutegravir"
+data1$medicat_cl[data1$medicat=="6. Tenofoivr(TDF) 300mg"] <- "Tenofovir"
+data1$medicat_cl[data1$medicat=="6. Tenofoivr(TDF) 300mg ; 4. Lamivudine(3TC) 300mg"] <- "Tenofovir + Lamivudine"
+data1$medicat_cl[data1$medicat=="8. Efavirenz(EFV) 600mg"] <- "Efavirenz"
+data1$medicat_cl[data1$medicat=="8. Efavirenz(EFV) 600mg ; 6. Tenofoivr(TDF) 300mg ; 4. Lamivudine(3TC) 300mg"] <- "Tenofovir + Lamivudine + Efavirenz"
+data1$medicat_cl[data1$medicat=="9. Nevirapine(NVP) 200mg"] <- "Nevirapine"
+data1$medicat_cl[data1$medicat=="9. Nevirapine(NVP) 200mg ; 6. Tenofoivr(TDF) 300mg ; 4. Lamivudine(3TC) 300mg"] <- "Nevirapine + Tenofovir + Lamivudine"
+data1$medicat_cl[data1$medicat=="9. Nevirapine(NVP) 200mg ; 7. Zidovudine(AZT) 300mg ; 4. Lamivudine(3TC) 300mg"] <- "Nevirapine + Zidovudine + Lamivudine"
+
+# create single variable for ART regimen
+data1$art_regimen <- paste(data1$medicat_cl, data1$arv_name)
+
+# remove extra spaces
+data1$art_regimen <- gsub("\\s", "", data1$art_regimen)
+
+# categorize by anchor drug
+pi <- c("Atazanavir", "Darunavir", "Indinavir", "Lopinavir", "Ritonavir", "Saquinavir", "Tipranavir")
+
+data2 <- data1 %>% 
+  mutate(efv = if_else(grepl("Efavirenz", art_regimen, ignore.case=TRUE), 1, NA),
+         nvp = if_else(grepl("Nevirapine", art_regimen, ignore.case=TRUE), 1, NA),
+         dtg = if_else(grepl("Dolutegravir", art_regimen, ignore.case=TRUE), 1, NA),
+         pi = if_else(grepl(paste(pi, collapse='|'), art_regimen, ignore.case=TRUE), 1, NA)) %>%
+  mutate(anchor_drug = case_when(is.na(dur_art) | dur_art<0 ~ 0,
+                                 efv==1 ~ 1,
+                                 nvp==1 ~ 2,
+                                 dtg==1 ~ 3,
+                                 pi==1 ~ 4,
+                                 .default = NA)) %>% 
+
+## MALARIA MED CLEANING -----
+
+  mutate(amoxicillin  = if_else(grepl("AMOX", oth8_txt, ignore.case=TRUE), "Amoxicillin", NA),
+         paracetamol = if_else(grepl("PARACETAMOL", oth8_txt, ignore.case=TRUE), "Paracetamol", NA),
+         ceftriaxone = if_else(grepl("CEFTR", oth8_txt, ignore.case=TRUE), "Ceftriaxone", NA),
+         coartem = if_else(grepl("COART", oth8_txt, ignore.case=TRUE), "Coartem", NA),
+         metronidazole = if_else(grepl("METRO | FLAGYL", oth8_txt, ignore.case=TRUE), "Metronidazole", NA),
+         azithromycin  = if_else(grepl("AZITHROMYCIN", oth8_txt, ignore.case=TRUE), "Azithromycin", NA),
+         ibuprofen  = if_else(grepl("BRUFEN | IBUPROFEN", oth8_txt, ignore.case=TRUE), "Ibuprofen", NA),
+         ciprofloxacin  = if_else(grepl("CIPRO", oth8_txt, ignore.case=TRUE), "Ciprofloxacin", NA),
+         dihydroartemisinin  = if_else(grepl("ARTEMISININ | DUOCOTEXIN", oth8_txt, ignore.case=TRUE), "Dihydroartemisinin", NA),
+         erythromycin  = if_else(grepl("ERYTHROMYCIN", oth8_txt, ignore.case=TRUE), "Erythromycin", NA),
+         diclofenac  = if_else(grepl("DICLOFENAC", oth8_txt, ignore.case=TRUE), "Diclofenac", NA),
+         levofloxacin  = if_else(grepl("LEVOFLOXCIN", oth8_txt, ignore.case=TRUE), "Levofloxacin", NA),
+         omeprazole = if_else(grepl("OMEPRAZOLE", oth8_txt, ignore.case=TRUE), "Omeprazole", NA)) %>% 
+  
+    mutate(tx_a = factor(tx_a,
+                      levels = c(0,1),
+                      labels = c("", "Oral Artemesinin combination"))) %>%
+    mutate(tx_b = factor(tx_b,
+                      levels = c(0,1),
+                      labels = c("", "Oral Quinine"))) %>%
+    mutate(tx_c = factor(tx_c,
+                      levels = c(0,1),
+                      labels = c("", "Oral Chloroquine"))) %>%
+    mutate(tx_d = factor(tx_d,
+                      levels = c(0,1),
+                      labels = c("", "Oral Fansidar"))) %>%
+    mutate(tx_e = factor(tx_e,
+                      levels = c(0,1),
+                      labels = c("", "Oral Primaquine"))) %>%
+    mutate(tx_f = factor(tx_f,
+                      levels = c(0,1),
+                      labels = c("", "Oral Clindamycin"))) %>%
+    mutate(tx_g = factor(tx_g,
+                      levels = c(0,1),
+                      labels = c("", "Oral Doxycycline or Tetracycline"))) %>%
+    mutate(tx_h = factor(tx_h,
+                      levels = c(0,1),
+                      labels = c("", "IV/IM Artemether"))) %>%
+    mutate(tx_i = factor(tx_i,
+                      levels = c(0,1),
+                      labels = c("", "IV/IM Quinine"))) %>%
+    mutate(tx_j = factor(tx_j,
+                      levels = c(0,1),
+                      labels = c("", "IV/IM Artesunate")))
+
+# create single variable for ART regimen
+data2$malaria_meds0 <- paste(data2$tx_a, data2$tx_b, data2$tx_c, data2$tx_d, data2$tx_e, data2$tx_f, data2$tx_g, data2$tx_g, data2$tx_i,
+                             data2$tx_j, data2$amoxicillin, data2$paracetamol, data2$ceftriaxone, data2$coartem, data2$metronidazole,
+                            data2$azithromycin, data2$ibuprofen, data2$ciprofloxacin, data2$dihydroartemisinin, data2$erythromycin,
+                            data2$diclofenac, data2$levofloxacin, data2$omeprazole)
+
+# remove extra spaces
+data2$malaria_meds <- gsub("NA", "", data2$malaria_meds0)
+
+data2 <- data2 %>% 
+  mutate(mal_med_clean = case_when(any_trt_mal=="No treatment given" ~ 0,
+                                   any_trt_mal=="Treatment given" & grepl("Artemesinin", malaria_meds, ignore.case=TRUE) ~ 1,
+                                   any_trt_mal=="Treatment given" & !str_detect(malaria_meds, "Artemesinin") ~ 2,
+                                   .default = NA)) %>% 
+  mutate(mal_med_clean = factor(mal_med_clean,
+                      levels = c(0,1,2),
+                      labels = c("No treatment given", "Treatment given - Artemesinin", "Treatment given - other")))
+
+```
+
+
+```{r, echo = FALSE}
+
+## DEFINE ANALYTIC POPULATION -----
+
+# impute using data from most recent visit prior to the unscheduled visit
+data3 <- data2 %>%
+  mutate(last_vl = vls200,
+         last_cd4 = cd4cat,
+         last_sysbp = sysbp,
+         last_diabp = diabp,
+         last_hemog = hemog,
+         last_altsgpt = altsgpt,
+         last_tbili = tbili,
+         last_dbili = dbili,
+         last_creat = creat,
+         last_wbc = wbc,
+         last_platelet = platelet,
+         last_art_regimen0 = anchor_drug) %>%
+  group_by(subjid) %>%  
+  fill(c(last_vl, last_cd4, last_sysbp, last_diabp, last_hemog, last_altsgpt, 
+         last_tbili, last_dbili, last_creat, last_art_regimen0), .direction = "down") %>%
+  ungroup() %>% 
+  mutate(last_art_regimen = if_else(!is.na(last_art_regimen0), last_art_regimen0, 
+                                    if_else(is.na(last_art_regimen0) & dur_art>0, 5, NA))) %>% 
+  mutate(last_art_regimen = factor(last_art_regimen,
+                      levels = c(0,1,2,3,4,5),
+                      labels = c("ART-naiive", "EFV", "NVP", "DTG", "PI-based", "Other")))
+
+
+data4 <- data3 %>%
+  
+  # exclude dx for pneumonia, covid, TB or cryptococcal antigen (note: this removes them from numerator and denominator)
+  filter(is.na(exclude)) %>%
+  
+  # define acute malaria visit based on positive smear or RDT
+  # note: PCR not collected across all sites/years (PCR data available through 2019)
+  mutate(test_acute_mal = if_else(smear==0 | smear==1 | rdt==0 | rdt==1 | rdt==2, 1, NA)) %>%
+  mutate(ever_test_acute_mal = if_else(smear==0 | smear==1 | rdt==0 | rdt==1 | rdt==2, 1, NA)) %>%
+  
+  mutate(acute_mal = if_else(smear==1 | rdt==1, 1, NA)) %>%
+  mutate(ever_acute_mal = if_else(smear==1 | rdt==1, 1, NA)) %>%
+  
+  group_by(subjid) %>%  
+  fill(c(ever_test_acute_mal, ever_acute_mal), .direction = "downup") %>% 
+  ungroup() %>% 
+  
+  # create new row id by subjid since some visit 1s got dropped
+  mutate(id = row_number(), .by = subjid)
+
+## ENROLLMENT NUMBERS -----
+
+# PLWH and PLWoH enrolled
+data1 %>%
+  group_by(subjid) %>%
+  count(hivflag) %>%
+  group_by(hivflag) %>%
+  count()
+
+# how many excluded?
+data1 %>%
+  filter(exclude==1) %>% 
+  group_by(subjid) %>%
+  count(hivflag) %>%
+  group_by(hivflag) %>%
+  count()
+
+# how many visits excluded?
+data1 %>%
+  filter(exclude==1) %>% 
+  group_by(hivflag) %>%
+  count()
+
+# PLWH and PLWoH included
+data4 %>%
+  group_by(subjid) %>%
+  count(hivflag) %>%
+  group_by(hivflag) %>%
+  count()
+
+# complete cases
+# pop_cc0 <- pop0[complete.cases(pop0[, c('gender', 'age', 'progid', 'vertical', 'missdose', 'vl1000')]),]
+# table(pop_cc0$hivflag)
+
+```
+
+
+```{r, echo = FALSE}
+
+## PERIOD PREVALENCE -----
+
+# plot ever malaria by HIV status and site
+s1 <- data4 %>%
+  mutate(ever_test_acute_mal = replace_na(ever_test_acute_mal, 0)) %>%
+  mutate(ever_acute_mal = replace_na(ever_acute_mal, 0)) %>%
+  filter(id==1 & ever_test_acute_mal==1) %>%
+  group_by(hivflag, progid) %>% 
+  summarise(tot_tested = n(),
+            tot_mal = sum(ever_acute_mal),
+            percent_mal = round(100*(sum(tot_mal)/n()), digits=2)) %>% 
+  filter(!(is.na(progid)))
+
+s2 <- data4 %>%
+  mutate(ever_test_acute_mal = replace_na(ever_test_acute_mal, 0)) %>%
+  mutate(ever_acute_mal = replace_na(ever_acute_mal, 0)) %>%
+  filter(id==1 & ever_test_acute_mal==1) %>%
+  group_by(hivflag) %>% 
+  summarise(tot_tested = n(),
+            tot_mal = sum(ever_acute_mal),
+            percent_mal = round(100*(sum(tot_mal)/n()), digits=2))
+
+s1$label <- paste(s1$tot_mal, " (", round(s1$percent_mal, digits = 0), "%)", sep = "")
+
+p1 <- ggplot(s1, aes(x=progid, y=percent_mal, fill=hivflag)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  labs(x = "", y = "Percent of participants tested") +
+  theme(legend.position = "bottom",
+        legend.title = element_blank()) +
+        geom_text(aes(label=label), vjust=1.6, color="white", 
+                  position = position_dodge(0.9), size=3.2) +
+        scale_fill_brewer(palette="Paired")
+
+print(p1)
+
+```
+
+
+```{r, echo = FALSE}
+
+## DESCRIPTIVE ANALYSES -----
+
+# breakdown of acute vs scheduled visits
+
+data5 <- data4 %>% 
+  mutate(ever_test_acute_mal = replace_na(ever_test_acute_mal, 0)) %>%
+  mutate(ever_acute_mal = replace_na(ever_acute_mal, 0)) %>%
+  filter(test_acute_mal==1) %>% 
+  mutate(ever_acute_mal = factor(ever_acute_mal,
+                            levels = c(0,1),
+                            labels = c("Never malaria", "Ever malaria")))
+table(data5$visit)
+
+## table 1. demographic characteristics, by ever malaria
+
+data_first <- data4 %>% 
+  mutate(ever_test_acute_mal = replace_na(ever_test_acute_mal, 0)) %>%
+  mutate(ever_acute_mal = replace_na(ever_acute_mal, 0)) %>%
+  filter(id==1 & ever_test_acute_mal==1) %>% 
+  mutate(ever_acute_mal = factor(ever_acute_mal,
+                            levels = c(0,1),
+                            labels = c("Never malaria", "Ever malaria")))
+
+table1 <- summary(tableby(hivflag ~ ever_acute_mal + agev + gender + fe(progid) + 
+                            fe(country) + hholdur + education + income_quartiles,
+                    data = data_first,
+                    numeric.stats = c("Nmiss", "medianq1q3"),
+                    numeric.test = "kwt",
+                    digits = 1), text = NULL)
+
+as.data.frame(table1)
+
+write.csv(table1, "G:/DCAC/DCAC_PEPFAR/RV329/Analyses/Malaria/Lauren_Sweet/table1_v2.csv")
+
+
+## table 2. clinical factors among those with malaria, by HIV status
+
+data_mal0 <- data4 %>% 
+  filter(test_acute_mal==1) %>%
+  mutate(id1 = row_number(), .by = subjid) %>%
+  group_by(subjid) %>% 
+  mutate(num_tests = max(id1)) %>% 
+  ungroup()
+
+data_mal <- data_mal0 %>% 
+  filter(acute_mal==1) %>%
+  mutate(id2 = row_number(), .by = subjid) %>%
+  group_by(subjid) %>% 
+  mutate(num_pos_tests = max(id2)) %>%
+  # use first eligible visit
+  filter(id2==1)
+    
+table2 <- summary(tableby(hivflag ~ last_sysbp + last_diabp + last_hemog + last_altsgpt + last_tbili + last_dbili + 
+                            last_creat + last_wbc + last_platelet + num_tests + num_pos_tests,
+                    data = data_mal,
+                    numeric.stats = c("Nmiss", "medianq1q3"),
+                    numeric.test = "kwt",
+                    digits = 1), text = NULL)
+
+as.data.frame(table2)
+
+write.csv(table2, "G:/DCAC/DCAC_PEPFAR/RV329/Analyses/Malaria/Lauren_Sweet/table2.csv")
+
+## table 2. HIV-related variables, PLWH only
+data_mal_plwh <- data_mal %>% filter(hivflag=="PLWH")
+
+table2_plwh <- summary(tableby(hivflag ~ last_vl + last_cd4 + dur_hiv + dur_art + ctx + last_art_regimen,
+                    data = data_mal_plwh,
+                    numeric.stats = c("Nmiss", "medianq1q3"),
+                    numeric.test = "kwt",
+                    digits = 1), text = NULL)
+
+as.data.frame(table2_plwh)
+
+write.csv(table2_plwh, "G:/DCAC/DCAC_PEPFAR/RV329/Analyses/Malaria/Lauren_Sweet/table2_plwh.csv")
+
+
+## table 3. summary of outcomes
+data_all_mal <- data4 %>% 
+  mutate(ever_test_acute_mal = replace_na(ever_test_acute_mal, 0)) %>%
+  mutate(ever_acute_mal = replace_na(ever_acute_mal, 0)) %>%
+  filter(test_acute_mal==1 & acute_mal==1)
+
+table3 <- summary(tableby(hivflag ~ oraltemp + fe(malariadx) + fe(malariadx2) + fe(species2) + fe(malaria_hosp) + 
+                            fe(any_trt_mal) + mal_med_clean + malaria_meds,
+                    data = data_all_mal,
+                    numeric.stats = c("Nmiss", "medianq1q3"),
+                    numeric.test = "kwt",
+                    digits = 1), text = NULL)
+
+as.data.frame(table3)
+
+write.csv(table3, "G:/DCAC/DCAC_PEPFAR/RV329/Analyses/Malaria/Lauren_Sweet/table3.csv")
+
+
+## REFERENCE -----
+# https://cran.r-project.org/web/packages/arsenal/vignettes/tableby.html
+
+```
+
+
+```{r, echo = FALSE}
+
+## INCIDENCE -----
+
+
+
+## REFERENCE -----
+# https://cran.r-project.org/web/packages/IncidencePrevalence/vignettes/a05_Calculating_incidence.html
+
+```
