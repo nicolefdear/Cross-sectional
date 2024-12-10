@@ -1,0 +1,965 @@
+---
+title: "HIV status disclosure and ART adherence among ART-experienced adolescents and young adults in AFRICOS"
+output: html_document
+author: "Nicole Dear"
+date: "`r Sys.Date()`"
+---
+
+
+```{r setup, include = FALSE}
+
+## SETUP -----
+
+# global settings
+rstudioapi::writeRStudioPreference("data_viewer_max_columns", 1000L)  # view more columns
+
+# load packages
+# install.packages(c("readxl", "ggplot2", "dplyr", "tidyr", "expss", "ggpubr", "stringr", "tidyverse", "lubridate",
+#                   "table1", "kableExtra", "lmtest", "sandwich", "k5", "binom", "glm2"))
+
+library(readxl)
+library(haven)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(textclean)
+library(ggpubr)
+library(stringr)
+library(tidyverse)
+library(lubridate)
+library(table1)
+library(kableExtra)
+library(data.table)
+library(lmtest)
+library(sandwich)
+library(lme4)
+
+# set working directory
+setwd("G:/DCAC/DCAC_PEPFAR/RV329/Data In/30124 freeze")
+
+# load data
+hivstat0 <- read_sas("hivstat0.sas7bdat")
+names(hivstat0) <- tolower(names(hivstat0))
+
+arvcode0 <- read_sas("arvcode0.sas7bdat")
+names(arvcode0) <- tolower(names(arvcode0))
+
+subjq_dm0 <- read_sas("subjq_dm0.sas7bdat")
+names(subjq_dm0) <- tolower(names(subjq_dm0))
+
+subjq_a0 <- read_sas("subjq_a0.sas7bdat")
+names(subjq_a0) <- tolower(names(subjq_a0))
+
+subjq_c0 <- read_sas("subjq_c0.sas7bdat")
+names(subjq_c0) <- tolower(names(subjq_c0))
+
+v_load0 <- read_sas("v_load0.sas7bdat")
+names(v_load0) <- tolower(names(v_load0))
+
+```
+
+
+### Project Description
+
+Adolescents and young adults represent an increasing share of people living with HIV (PLWH) globally. In 2022, 1.65 (1.18-2.19) million of an estimated 39.0 million total PLWH were age 10-19 years.1 Adolescents and young adults with HIV face multifaceted challenges to long-term treatment success, particularly if HIV was acquired at an early age. Barriers include limited availability of pediatric-formulated regimens, accumulation of drug resistance mutations, treatment fatigue, and socio-behavioral factors such as lack of social support, violence, disclosure concerns and stigma that may interfere with optimal ART adherence.2–5 Strategies to improve ART adherence are critical to attaining the UNAIDS third 95 among all age groups of PLWH.  
+
+Prior evidence suggests that HIV status disclosure is associated with improved HIV outcomes, including ART adherence, enhanced engagement in care, better immune recovery and viral suppression as well as higher likelihood of condom use and increased social support.6,7 A recent meta-analysis found that children and adolescents who were aware of their HIV status had improved adherence to ART compared to those who were not aware of their status.8 However, data on disclosure to others (ex., peers, caregivers) is limited.  
+
+The objective of this study is to characterize HIV status disclosure among adolescents and young adults in AFRICOS and assess the relationship between status disclosure and ART adherence as well as assess whether route of HIV transmission (vertical vs non-vertical) may moderate the relationship between status disclosure and ART adherence.  
+
+
+```{r, include = FALSE}
+
+## DATA CLEANING -----
+
+hivstat1 <- hivstat0 %>%
+  select(subjid, visit, visitdt, gender, age, dobdtn, hivflag, hivstat, progid, diagdtn, art_sdtn, dur_art, dur_hiv) %>% 
+  filter(visit<90) %>% 
+  distinct(subjid, visit, .keep_all = TRUE)
+
+# test <- hivstat1 %>% 
+#   group_by(subjid) %>%
+#   mutate(v1_date = visitdt[1]) # first row by subjid
+
+# check for dups by subjid and visit
+# duptest1 <- hivstat1 %>% 
+#   group_by(subjid, visit) %>% 
+#   mutate(dupe = n()>1)
+# table(duptest1$dupe)
+
+subjq_dm1 <- subjq_dm0 %>%
+  select(subjid, visitdt, visit, educat, eductxt, employed, enrl_ovc, provide, hhincome, hcurrtyp, hcurrtxt, 
+         hholdur, howfrkm, food, mealnum, mealcut) %>% 
+  filter(visit<90) %>% 
+  # convert unk/no response values to missing
+  mutate(enrl_ovc = na_if(enrl_ovc, -1)) %>%
+  mutate(enrl_ovc = na_if(enrl_ovc, 8)) %>%
+  # remove participants with duplicate visits with wrong date
+  filter(!(subjid=="D01-0045" & visit==18 & visitdt=='2023-01-25')) %>%
+  filter(!(subjid=="D01-0555" & visit==3 & visitdt=='2023-03-01')) %>% 
+  distinct(subjid, visit, .keep_all = TRUE)
+  
+# check for dups by subjid and visit
+# duptest2 <- subjq_dm1 %>% 
+#   group_by(subjid, visit) %>% 
+#   mutate(dupe = n()>1)
+# table(duptest2$dupe)
+
+subjq_a1 <- subjq_a0 %>%
+  select(subjid, visit, visitdt, sequence, hivinfct, hivintxt, hivinf, takearv, pillnum, pillnr, missarv, lsmsarv, msarv_a,
+         msarv_b, msarv_c, msarv_d, msarv_e, msarv_f, msarv_g, msarv_h, msarv_i, msarv_j, msarv_k, msarv_l, msarv_m, msarv_n, 
+         msarv_o, msarv_p, msarv_z, msarvtxt, msarnone, arvcost, acurrtyp, acurrtxt, arvsupp, hivfood, hvfd_a, hvfd_b, hvfd_z, 
+         hvfdtxt, hvste_a, hvste_b, hvste_c, hvste_z, hvstetxt, hvsteno, hvstd_a, hvstd_b, hvstd_z, hvstdtxt, hvstdno, whiv_a, 
+         whiv1a, whiv_b, whiv2b, whiv_c, whiv3c, whiv_d, whiv4d, whiv_e, whiv5e, whiv_f, whiv6f, whiv_g, whiv7g, whiv_h, 
+         whiv8h, whiv_i, whiv9i, whiv_j, whiv10j, whiv_z, whiv11z, whivtxt, whivnone, sghivfrq, mtct, oftkarv, gjobarv, 
+         msarv_q, comgrp_a, comgrp_b, comgrp_c, comgrp_d, comgrp_e, comgrp_z, comgrptx, comgrpno, hvsti_a, hvsti_b, hvsti_c, 
+         hvsti_d, hvsti_e, hvsti_f, hvsti_g, hvsti_h, hvsti_i, hvsti_j, hvsti_k, hvsti_l, hvsti_m, hvsti_n, hvsti_z, unwlove, 
+         whiv_k, whiv11k, whiv_l, whiv12l, whiv_m, whiv13m, whiv_n, whiv14n, attend_a, attend_b, attend_c, attend_d, attend_z,
+         othattxt) %>% 
+  filter(visit<90 & sequence==1) %>%
+  # convert unk/no response values to missing
+  mutate(missarv = na_if(missarv, 7)) %>%
+  mutate(unwlove = na_if(unwlove, 99)) %>%
+  # remove participants with duplicate visits with wrong date
+  filter(!(subjid=="D01-0045" & visit==18 & visitdt=='2023-01-25')) %>%
+  filter(!(subjid=="D01-0371" & visit==15 & visitdt=='2022-02-21')) %>% 
+  filter(!(subjid=="D02-0010" & visit==10 & visitdt=='2023-03-22')) %>% 
+  distinct(subjid, visit, .keep_all = TRUE)
+
+# check for dups by subjid and visit
+# duptest3 <- subjq_a1 %>% 
+#   group_by(subjid, visit) %>% 
+#   mutate(dupe = n()>1)
+# table(duptest3$dupe)
+
+subjq_c1 <- subjq_c0 %>%
+  select(subjid, visit, visitdt, sequence, alcohol, alcohnum, alcdrnum, alcohsex, alcohcut, cigaret, cigarnum, drug, p_hit,
+         p_abu, p_threat, p_refuse, p_forced, p_othv, pothtx, g_hit, g_abu, g_threat, g_refuse, g_forced, g_othvix, gothtx,
+         violnh_a, violnh_b, violnh_c, violnh_d, violnh_e, violnh_f, violnh_g, violnh_z, violhtxt, viohnone, violnp_a, 
+         violnp_b, violnp_c, violnp_d, violnp_e, violnp_f, violnp_g, violnp_z, violptxt, viopnone, harm, harmsxor, 
+         sexchild, sexforce, afraid) %>% 
+  filter(visit<90) %>%
+  # convert unk/no response values to missing
+  mutate(alcohol = na_if(alcohol, 8)) %>%
+  mutate(cigaret = na_if(cigaret, -1)) %>%
+  mutate(drug = na_if(drug, -1)) %>%
+  # remove participants with duplicate visits with wrong date
+  filter(!(subjid=="D01-0045" & visit==18 & visitdt=='2023-01-25')) %>%
+  filter(!(subjid=="D02-0010" & visit==10 & visitdt=='2023-03-22')) %>% 
+  distinct(subjid, visit, .keep_all = TRUE)
+
+# check for dups by subjid and visit
+# duptest4 <- subjq_c1 %>% 
+#   group_by(subjid, visit) %>% 
+#   mutate(dupe = n()>1)
+# table(duptest4$dupe)
+
+v_load1 <- v_load0 %>%
+  select(subjid, visit, visitdt, sequence, drawper, drawdt, vl_circ, vlcopy, nodetect, vl) %>%
+  # include only rows with draw at study visit
+  filter(drawper==1) %>%
+  # remove duplicate rows
+  # (for D02-0124, this row with visit=2 is a dup of visit 7
+  # and for B01-0033, this row is a dup where the other visit 7 row has non-missing vlcopy)
+  filter(!(subjid=="B01-0033" & visit==7 & is.na(vlcopy))) %>%
+  filter(!(subjid=="D02-0124" & visitdt=="2022-08-19" & visit==2)) %>%
+  # remove rows that have same subjid, visit, and vlcopy
+  distinct(subjid, visit, vlcopy, .keep_all = TRUE) %>%
+  # variable to check if visit values are repeated within a subjid
+  group_by(subjid, visit) %>%
+  mutate(dupflag = if_else(row_number()>1, 1, 0)) %>%
+  # remove rows from same visit with sequence greater than 1
+  filter(!(dupflag==1 & sequence!=1)) %>% 
+  # clean vl variable
+  mutate(vl_clean = case_when(nodetect==1 & is.na(vlcopy) ~ "undetectable",
+                              vl_circ==1 ~ paste0("<", vlcopy),
+                              vl_circ==2 | is.na(vl_circ) ~ as.character(vlcopy),
+                              vl_circ==3 ~ paste0(">", vlcopy))) %>% 
+  mutate(vl1000 = case_when(vl<1000 ~ 0,
+                            vl>=1000 ~ 1,
+                            .default = NA)) %>% 
+  mutate(vls1000 = case_when(vl<1000 ~ 1,
+                            vl>=1000 ~ 0,
+                            .default = NA))
+
+
+## MERGE DATA -----
+
+data0 <- hivstat1 %>%
+  left_join(subjq_dm1, by = c("subjid", "visit")) %>% 
+  left_join(subjq_a1, by = c("subjid", "visit")) %>% 
+  left_join(subjq_c1, by = c("subjid", "visit")) %>% 
+  left_join(v_load1, by = c("subjid", "visit"))
+
+```
+
+
+```{r, include = FALSE}
+
+## RECODE FREE TEXT RESPONSES -----
+
+# code free text responses for route of HIV transmission
+data1 <- data0 %>% 
+  mutate(hivintxt_new = strip(hivintxt, lower.case = FALSE, apostrophe.remove=TRUE))
+
+freetext <-as.data.frame(table(data1$hivintxt_new))
+
+# define patterns to search for
+mtct_text <- c('AT BIRTH', 'BORN WITH', 'BREAST MILK', 'BREST FEEDING', 'DURING DELIVERY', 'MOTHER TO CHILD', 'MOTHER TOCHILD', 
+            'FROM THE PARENTS', 'PMTCT', 'MTCT', 'VERRTICAL TRANSMISSION', 'VERTICAL')
+unk_text <- c('CAN NOT RECALL', 'CANNOT IDENTIFY HOW HE ACQUIRED', 'NOT SURE', 'DO NOT KNOW', 'DOES NOT KNOW', 'DOESNT KNOW',
+              'DONT KNOW', 'DONT REMEMBER', 'NOT KNOW', 'NOT KNOWN', 'NOT KNOW', 'CANNOT TELL HOW SHE WAS INFECTED', 'UNKNOWN')
+
+data1$flag_mtct <- ifelse(grepl(paste(mtct_text, collapse='|'), data1$hivintxt), 1, 0)
+data1$flag_unk <- ifelse(grepl(paste(unk_text, collapse='|'), data1$hivintxt), 1, 0)
+
+
+# code free text responses for disclosure to 'other'
+freetext2 <-as.data.frame(table(data1$whivtxt))
+
+# define patterns to search for
+txt_a <- c('CO-WIFE', 'CO-WIVES', 'CO WIFE', 'HUSBAND', 'PARTNER', 'SPOUSE', 'FANCE', 'FIANCE', 'GILFRIEND', 'GIRL FRIEND', 
+           'GIRLFRIEND', 'WIFE', 'SEX PARTNER', 'WIFI')
+txt_b <- c('FATHER', 'MOTHER', 'GUARDIAN', 'IN-LAWS', 'INLAW', 'MZAZI', 'PARENT', 'WALEZI')
+txt_c <- c('BROTHER', 'SISTER', 'PACHA', 'SHEMEJI')
+txt_d <- c('DAUGHTER', 'SON')
+txt_colleague <- c('CO-WORKER', 'COLLEAGUE', 'COLLEGUE', 'EMPLOYEE', 'WORKMATE')
+txt_e <- c('GRAND MOTHER', 'GRAND PARENT', 'GRANDMOTHER', 'GRANDPARENT')
+txt_f <- c('COUSIN', 'PASTOR AND AUNT')
+txt_g <- c('NIECE')
+txt_h <- c('FELLOW ORPHANS', 'FELLOW TEACHERS', 'FRIEND', 'OTHER PRISONERS', 'PRISONMATE', 'TRAVEL COMPANION')
+txt_j <- c('HEAD OF CHURCH', 'CHURCH LEADERS', 'CHURCH MEMBERS', 'CHURCHMATES', 'CHURCH LEADER', 'PSTOR', 'PASTOR', 
+           'ISLAMIC LEADER', 'MOSQUE LEADER', 'MZEE WA KANISA', 'WAUMINI KANISANI', 'WAZEE WA KANISA')
+txt_k <- c('EMPLOYER', 'EMPLOYMENT', 'BOSS', 'HEAD OF HIS DEPARTMENT', 'HEAD OF HIS WORK', 'HUMAN RESOURCE', 'SUPERVISOR',
+           'MANAGER', 'NEW INCHARGE')
+txt_l <- c('DESKMATE')
+txt_m <- c('SCHOOL LECTURERS', 'SCHOOL MATRON', 'TEACHER')
+txt_n <- c('GRANDCHILD', 'GRAND CHILD', 'GRAND CHILDREN', 'GRAND DAUGHERS', 'GRAND DAUGHTER', 'GRAND SON', 'GRANDSON',
+           'GRANS SON', 'MJUKUU', 'WAJUKUU')
+txt_neighbor <- c('NEIGBOUR', 'NEIGHBOR', 'NEIGHBOUR', 'NEIGHBOUURS', 'JIRANI', 'MY NEIGHBOUR', 'NEIGBOUR',
+                  'NEIGHBOR', 'NEIGHBOUS', 'VILLAGEMATES')
+
+data1$flag_a <- ifelse(grepl(paste(txt_a, collapse='|'), data1$whivtxt), 1, 0)
+data1$flag_b <- ifelse(grepl(paste(txt_b, collapse='|'), data1$whivtxt), 1, 0)
+data1$flag_c <- ifelse(grepl(paste(txt_c, collapse='|'), data1$whivtxt), 1, 0)
+data1$flag_d <- ifelse(grepl(paste(txt_d, collapse='|'), data1$whivtxt), 1, 0)
+data1$flag_colleague <- ifelse(grepl(paste(txt_colleague, collapse='|'), data1$whivtxt), 1, 0)
+data1$flag_e <- ifelse(grepl(paste(txt_e, collapse='|'), data1$whivtxt), 1, 0)
+data1$flag_f <- ifelse(grepl(paste(txt_f, collapse='|'), data1$whivtxt), 1, 0)
+data1$flag_g <- ifelse(grepl(paste(txt_g, collapse='|'), data1$whivtxt), 1, 0)
+data1$flag_h <- ifelse(grepl(paste(txt_h, collapse='|'), data1$whivtxt), 1, 0)
+data1$flag_j <- ifelse(grepl(paste(txt_j, collapse='|'), data1$whivtxt), 1, 0)
+data1$flag_k <- ifelse(grepl(paste(txt_k, collapse='|'), data1$whivtxt), 1, 0)
+data1$flag_l <- ifelse(grepl(paste(txt_l, collapse='|'), data1$whivtxt), 1, 0)
+data1$flag_m <- ifelse(grepl(paste(txt_m, collapse='|'), data1$whivtxt), 1, 0)
+data1$flag_n <- ifelse(grepl(paste(txt_n, collapse='|'), data1$whivtxt), 1, 0)
+data1$flag_neighbor <- ifelse(grepl(paste(txt_neighbor, collapse='|'), data1$whivtxt), 1, 0)
+
+# code free text responses for 'other' education
+educat1 <- c("1", "ONE", "2", "TWO", "PRIMARY")
+educat3 <- c("3", "FOUR", "SEVEN", "8", "EIGHT", "SECONDARY")
+educat5 <- c("COLLAGE", "COLLEGE", "UNIVERSITY")
+educat6 <- c("POST GRADUATE")
+
+data1$flag_educat1 <- ifelse(grepl(paste(educat1, collapse='|'), data1$eductxt), 1, 0)
+data1$flag_educat3 <- ifelse(grepl(paste(educat3, collapse='|'), data1$eductxt), 1, 0)
+data1$flag_educat5 <- ifelse(grepl(paste(educat5, collapse='|'), data1$eductxt), 1, 0)
+data1$flag_educat6 <- ifelse(grepl(paste(educat6, collapse='|'), data1$eductxt), 1, 0)
+
+test <- data1 %>%
+  # select(subjid, visit, visitdt.x, hivflag, hivinfct, hivintxt, flag_mtct, flag_unk)
+  # select(subjid, visit, visitdt.x, hivflag, whivtxt, flag_a, flag_b, flag_c, flag_d, flag_colleague, flag_e, flag_f, flag_g, 
+  # flag_h, flag_j, flag_k, flag_l, flag_m, flag_n, flag_neighbor)
+  select(subjid, visit, visitdt.x, hivflag, educat, eductxt, flag_educat1, flag_educat3, flag_educat5, flag_educat6)
+
+# create new variables and convert to factor
+data2 <- data1 %>%
+  
+  # vertical vs non-vertical transmission
+  mutate(vertical = case_when(hivinfct==8 | flag_mtct==1 ~ 1,
+                                hivinfct==1 | hivinfct==2 | hivinfct==3 | hivinfct==4 | hivinfct==5 | hivinfct==6 | 
+                                  hivinfct==7 | (hivinfct==90 & flag_mtct!=1 & flag_unk!=1) ~ 0,
+                                hivinfct==97 | hivinfct==98 | flag_unk==1 ~ NA,
+                                .default = 0)) %>%
+  mutate(vertical = factor(vertical,
+                    levels = c(0,1),
+                    labels = c("Not vertical transmission", "Vertical transmission"))) %>%
+  
+  # disclosure variables
+  mutate(disclose_spouse = case_when(whiv_a==1 | flag_a==1 ~ 1, 
+                                .default = 0)) %>%
+  mutate(disclose_parent = case_when(whiv_b==1 | flag_b==1 ~ 1, 
+                                .default = 0)) %>%
+  mutate(disclose_sibling = case_when(whiv_c==1 | flag_c==1 ~ 1, 
+                                .default = 0)) %>%
+  mutate(disclose_child = case_when(whiv_d==1 | flag_d==1 ~ 1, 
+                                .default = 0)) %>%
+  mutate(disclose_colleague = case_when(flag_colleague==1 ~ 1, 
+                                .default = 0)) %>%
+  mutate(disclose_grandparent = case_when(whiv_e==1 | flag_e==1 ~ 1, 
+                                .default = 0)) %>%
+  mutate(disclose_extendadult = case_when(whiv_f==1 | flag_f==1 ~ 1, 
+                                .default = 0)) %>%
+  mutate(disclose_extendadol = case_when(whiv_g==1 | flag_g==1 ~ 1, 
+                                .default = 0)) %>%
+  mutate(disclose_friend = case_when(whiv_h==1 | flag_h==1 ~ 1, 
+                                .default = 0)) %>%
+  mutate(disclose_church = case_when(whiv_j==1 | flag_j==1 ~ 1, 
+                                .default = 0)) %>%
+  mutate(disclose_employer = case_when(whiv_k==1 | flag_k==1 ~ 1, 
+                                .default = 0)) %>%
+  mutate(disclose_schoolmate = case_when(whiv_l==1 | flag_l==1 ~ 1, 
+                                .default = 0)) %>%
+  mutate(disclose_teacher = case_when(whiv_m==1 | flag_m==1 ~ 1, 
+                                .default = 0)) %>%
+  mutate(disclose_grandchild = case_when(whiv_n==1 | flag_n==1 ~ 1, 
+                                .default = 0)) %>% 
+  mutate(disclose_neighbor = case_when(flag_neighbor==1 ~ 1, 
+                                .default = 0)) %>%
+  mutate(disclose_any = if_else(disclose_spouse==1 | disclose_parent==1 | disclose_sibling==1 | disclose_child==1 |
+                                  disclose_colleague==1 | disclose_grandparent==1 | disclose_extendadult==1 |
+                                  disclose_extendadol==1 | disclose_friend==1 | disclose_church==1 | disclose_employer==1 |
+                                  disclose_schoolmate==1 | disclose_teacher==1 | disclose_grandchild==1 | 
+                                  disclose_neighbor==1, 1, 0)) %>%
+  mutate(disclose_immedfam = if_else(disclose_spouse==1 | disclose_parent==1 | disclose_sibling==1 | 
+                                       disclose_child==1, 1, 0)) %>%
+
+  # demographics
+  mutate(country = case_when(progid==1 ~ 1,
+                             progid==2 | progid==3 ~ 2,
+                             progid==4 ~ 3,
+                             progid==5 ~ 4,
+                             .default = NA)) %>%
+  mutate(country = factor(country,
+                          levels = c(1,2,3,4),
+                          labels = c("Uganda", "Kenya", "Tanzania", "Nigeria"))) %>% 
+  mutate(progid = factor(progid,
+                   levels = c(1,2,3,4,5),
+                   labels = c("Kayunga, Uganda", "South Rift Valley, Kenya", "Kisumu West, Kenya", 
+                              "Mbeya, Tanzania", "Abuja & Lagos Nigeria"))) %>%
+  mutate(hholdur = factor(hholdur,
+                          levels = c(1,2,3),
+                          labels = c("Urban", "Peri-urban", "Rural"))) %>%
+  mutate(gender = factor(gender,
+                   levels = c(1,2),
+                   labels = c("Male", "Female"))) %>%
+  mutate(hivflag = factor(hivflag,
+                    levels = c(1,2),
+                    labels = c("PLWH", "PLWoH"))) %>% 
+  mutate(hivstat = factor(hivstat,
+                    levels = c(1,2),
+                    labels = c("PLWH", "PLWoH"))) %>%
+  mutate(education = case_when(educat==0 | educat==1 | (educat==90 & flag_educat1==1) ~ 0,
+                               educat==2 | educat==3 | (educat==90 & flag_educat3==1) ~ 1,
+                               educat>3 | (educat==90 & flag_educat5==1) | (educat==90 & flag_educat6==1) ~ 2,
+                               .default = NA)) %>% 
+  mutate(education = factor(education,
+                          levels = c(0,1,2),
+                          labels = c("None or some primary", "Primary or some secondary", "Secondary and above"))) %>%
+  
+  # ART adherence & treatment support
+  mutate(missdose = case_when(missarv==0 ~ 0,
+                              missarv>=1 ~ 1,
+                              .default = NA)) %>%
+  mutate(nomissdose = case_when(missarv==0 ~ 1,
+                              missarv>=1 ~ 0,
+                              .default = NA)) %>%
+  # mutate(missdose = factor(missdose,
+  #                          levels = c(0,1),
+  #                          labels = c("No missed doses", "Missed 1 or more doses"))) %>%
+  mutate(missarv = factor(missarv,
+                          levels = c(0,1,2,3,4),
+                          labels = c("None", "1-2 days", "3-5 days", "6-10 days", "More than 10 days"))) %>%
+  mutate(arvsupp = factor(arvsupp,
+                           levels = c(0,1),
+                           labels = c("No treatment supporter", "Has treatment supporter"))) %>%
+  mutate(hivsupportgroup = case_when(sghivfrq==0 ~ 0,
+                                     sghivfrq==1 ~ 1,
+                                     sghivfrq==2 ~ 2,
+                                     sghivfrq==3 | sghivfrq==4 ~ 3,
+                                     .default = NA)) %>%
+  mutate(hivsupportgroup = factor(hivsupportgroup,
+                           levels = c(0,1,2,3),
+                           labels = c("Not at all", "Less than once a month", "Once a month", "More than once a month"))) %>%
+  mutate(enrl_ovc = factor(enrl_ovc,
+                      levels = c(0,1,5),
+                      labels = c("No", "Yes", "Over age 18 (NA)"))) %>%
+  
+  # food insecurity
+  mutate(mealnum_c = case_when(mealnum<3 ~ 0,
+                               mealnum==3 ~ 1,
+                               mealnum>3 ~ 2,
+                               .default = NA)) %>% 
+  mutate(mealcut_c = case_when(mealcut==0 ~ 0,
+                               mealcut>=1 ~ 1,
+                               .default = NA)) %>% 
+  mutate(foodinsecure = case_when(food==1 & (mealnum_c==1 | mealnum_c==2) ~ 0,
+                                  food==0 | mealnum_c==0 ~ 1,
+                                  .default = NA)) %>% 
+  mutate(mealnum_c = factor(mealnum_c,
+                            levels = c(0,1,2),
+                            labels = c("<3 meals/day", "3 meals/day", ">3 meals/day"))) %>% 
+  mutate(mealcut_c = factor(mealcut_c,
+                            levels = c(0,1),
+                            labels = c("No meals cut/reduced", "1+ meals cut/reduced"))) %>%
+  mutate(foodinsecure = factor(foodinsecure,
+                            levels = c(0,1),
+                            labels = c("Enough Food and 3+ meals/day", "Not Enough Food or <3 meals/day"))) %>%
+  
+  # substance use
+  mutate(alcohol = factor(alcohol,
+                          levels = c(0,1),
+                          labels = c("No", "Yes"))) %>%
+  mutate(cigaret = factor(cigaret,
+                          levels = c(0,1),
+                          labels = c("No", "Yes"))) %>% 
+  mutate(drug = factor(drug,
+                          levels = c(0,1),
+                          labels = c("No", "Yes"))) %>%
+  
+  # stigma and discrimination
+  mutate(discrim_disrupt_care = case_when(hvstd_a==1 | hvstd_b==1 ~ 1,
+                                  .default = 0)) %>% 
+  mutate(discrim_disrupt_care = factor(discrim_disrupt_care,
+                                       levels = c(0,1),
+                                       labels = c("No", "Yes"))) %>%
+  mutate(unwlove = factor(unwlove,
+                          levels = c(0,1,2,3),
+                          labels = c("Never", "Rarely", "Sometimes", "Often"))) %>%
+  group_by(subjid) %>%
+  fill(c(hivflag, gender, diagdtn, art_sdtn, progid, dobdtn, hholdur, vertical, disclose_spouse, disclose_parent,
+         disclose_sibling, disclose_child, disclose_colleague, disclose_grandparent, disclose_extendadult, 
+         disclose_extendadol, disclose_friend, disclose_church, disclose_employer, disclose_schoolmate, disclose_teacher,
+         disclose_grandchild, disclose_neighbor, disclose_any, disclose_immedfam), .direction = "downup") %>%
+  ungroup()
+
+# fill in any missing agev using calculated age
+i <- is.na(data2$age)
+data2$age[i] <- with(data2, (data2$visitdt.x[i] - data2$dobdtn[i]) / 365.25)
+
+# fill in duration since HIV dx and duration on ART if missing
+j <- is.na(data2$dur_hiv)
+data2$dur_hiv[j] <- difftime(data2$visitdt.x[j], data2$diagdtn[j], units = "days") / 365.25
+
+k <- is.na(data2$dur_art)
+data2$dur_art[k] <- difftime(data2$visitdt.x[k], data2$art_sdtn[k], units = "days") / 365.25
+
+```
+
+
+```{r, echo = FALSE}
+
+## ENROLLMENT SUMMARY -----
+
+# plot enrollment by HIV status and site, overall
+s1 <- data2 %>%
+  filter(visit==1) %>%
+  group_by(hivflag, progid) %>% 
+  summarise(Freq = n())
+
+p1 <- ggplot(s1, aes(x=progid, y=Freq, fill=hivflag)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  labs(x = "", y = "Number of participants") +
+  theme(legend.position = "bottom",
+        legend.title = element_blank()) +
+        geom_text(aes(label=Freq), vjust=1.6, color="white", 
+                  position = position_dodge(0.9), size=3.5) +
+        scale_fill_brewer(palette="Paired")
+
+print(p1)
+
+# plot enrollment by HIV status and site, youth cohort only
+s2 <- data2 %>%
+  filter(visit==1 & age<25) %>%
+  group_by(hivflag, progid) %>% 
+  summarise(Freq = n())
+
+p2 <- ggplot(s2, aes(x=progid, y=Freq, fill=hivflag)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  labs(x = "", y = "Number of participants") +
+  theme(legend.position = "bottom",
+        legend.title = element_blank()) +
+        geom_text(aes(label=Freq), vjust=1.6, color="white", 
+                  position = position_dodge(0.9), size=3.5) +
+        scale_fill_brewer(palette="Paired")
+
+print(p2)
+
+```
+
+
+```{r, echo = FALSE}
+
+# DEFINE ANALYTIC POPULATION -----
+
+# PLWH and PLWoH enrolled
+data2 %>%
+  group_by(subjid) %>%
+  count(hivflag) %>%
+  group_by(hivflag) %>%
+  count()
+
+# PLWH and PLWoH enrolled, youth and young adults (under 25 years)
+data2 %>%
+  filter(age<25) %>% 
+  group_by(subjid) %>%
+  count(hivflag) %>%
+  group_by(hivflag) %>%
+  count()
+
+# PLWH on ART at most recent visit, youth and young adults (under 25 years)
+pop0 <- data2 %>%
+  filter(hivflag=="PLWH" & takearv==1 & age<25) %>%
+  group_by(subjid) %>%
+  slice_tail(n = 1)
+
+# pop0 <- data2 %>%
+#   filter(hivflag=="PLWH" & takearv==1 & age<25)
+
+table(pop0$hivflag)
+
+# complete cases
+pop_cc0 <- pop0[complete.cases(pop0[, c('gender', 'age', 'progid', 'vertical', 'missdose', 'vl1000', 'disclose_spouse', 'disclose_parent', 'disclose_sibling', 'disclose_child', 'disclose_colleague', 'disclose_grandparent', 'disclose_extendadult', 'disclose_extendadol', 'disclose_friend', 'disclose_church', 'disclose_employer', 'disclose_schoolmate', 'disclose_teacher', 'disclose_grandchild', 'disclose_neighbor', 'disclose_any')]),]
+
+table(pop_cc0$hivflag)
+
+# setwd("G:/DCAC/DCAC_PEPFAR/RV329/Analyses/Youth/Disclosure_adherence")
+# write.xlsx(pop_cc0, file = "data_set_clean.xlsx")
+
+```
+
+
+```{r, echo = FALSE}
+
+## SUMMARIZE DISCLOSURE VARIABLES -----
+
+s3 <- pop_cc0 %>%
+  group_by(hivflag) %>%
+  summarise(anyone = sum(disclose_any),
+            immediatefam = sum(disclose_immedfam),
+            spouse = sum(disclose_spouse),
+            parent = sum(disclose_parent),
+            sibling = sum(disclose_sibling),
+            child = sum(disclose_child),
+            colleague = sum(disclose_colleague),
+            grandparent = sum(disclose_grandparent),
+            extadult = sum(disclose_extendadult),
+            extadol = sum(disclose_extendadol),
+            friend = sum(disclose_friend),
+            church = sum(disclose_church),
+            friend = sum(disclose_friend),
+            employer = sum(disclose_employer),
+            schoolmate = sum(disclose_schoolmate),
+            teacher = sum(disclose_teacher),
+            grandchild = sum(disclose_grandchild),
+            neighbor = sum(disclose_neighbor),
+            n = n()) %>% 
+  select(anyone, immediatefam, spouse, parent, sibling, child, colleague, grandparent, extadult, extadol, friend, church, 
+         employer, schoolmate, teacher, grandchild, neighbor)
+
+s3_t <- s3 %>%
+  rownames_to_column() %>% 
+  pivot_longer(!rowname, names_to = "disclosed_to", values_to = "col2") %>% 
+  pivot_wider(names_from = "rowname", values_from = "col2") %>% 
+  rename("freq" = "1")
+
+# calculate percentages
+s3_t$percent <- round(100*(s3_t$freq/698),2)
+
+# create labels
+s3_t$label <- paste(s3_t$freq, " (", round(s3_t$percent, digits = 1), "%)", sep = "")
+
+# create factor version of disclosed_to variable
+s3_t$disclosed_to_f <- NA
+s3_t$disclosed_to_f[s3_t$disclosed_to=="anyone"] <- 1
+s3_t$disclosed_to_f[s3_t$disclosed_to=="child"] <- 2
+s3_t$disclosed_to_f[s3_t$disclosed_to=="church"] <- 3
+s3_t$disclosed_to_f[s3_t$disclosed_to=="colleague"] <- 4
+s3_t$disclosed_to_f[s3_t$disclosed_to=="employer"] <- 5
+s3_t$disclosed_to_f[s3_t$disclosed_to=="extadol"] <- 6
+s3_t$disclosed_to_f[s3_t$disclosed_to=="extadult"] <- 7
+s3_t$disclosed_to_f[s3_t$disclosed_to=="friend"] <- 8
+s3_t$disclosed_to_f[s3_t$disclosed_to=="grandchild"] <- 9
+s3_t$disclosed_to_f[s3_t$disclosed_to=="grandparent"] <- 10
+s3_t$disclosed_to_f[s3_t$disclosed_to=="immediatefam"] <- 11
+s3_t$disclosed_to_f[s3_t$disclosed_to=="neighbor"] <- 12
+s3_t$disclosed_to_f[s3_t$disclosed_to=="parent"] <- 13
+s3_t$disclosed_to_f[s3_t$disclosed_to=="schoolmate"] <- 14
+s3_t$disclosed_to_f[s3_t$disclosed_to=="sibling"] <- 15
+s3_t$disclosed_to_f[s3_t$disclosed_to=="spouse"] <- 16
+s3_t$disclosed_to_f[s3_t$disclosed_to=="teacher"] <- 17
+
+s3_t <- s3_t %>% 
+  mutate(disclosed_to_f = factor(disclosed_to_f,
+                          levels = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17),
+                          labels = c("Anyone", "Child (son/daughter)", "Church member", "Colleague", "Employer",
+                                     "Extended adolescent family member", "Extended adult family member", "Friend/peer",
+                                     "Grandchild", "Grandparent", "Immediate family member", "Neighbor", "Parent", 
+                                     "Schoolmate", "Sibling", "Spouse/partner", "Teacher")))
+
+# plot
+bar <- s3_t %>%
+  arrange(freq) %>%
+  mutate(disclosed_to_f=factor(disclosed_to_f, levels=disclosed_to_f)) %>%
+  ggplot(aes(x = disclosed_to_f, y = percent)) + 
+  geom_bar(stat = "identity", fill="royalblue") +
+  coord_flip() +
+  geom_text(aes(label = label), size = 3.5, hjust = -0.2) +
+  xlab("Individual dislosed to") +
+  ylab("Percent") +
+  lims(y = c(0, 50))
+
+plot(bar)
+
+```
+
+
+```{r, echo = FALSE}
+
+## DESCRIPTIVE ANALYSES -----
+
+pop_cc <- pop_cc0 %>% 
+  mutate(disclose_spouse = factor(disclose_spouse,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_parent = factor(disclose_parent,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_sibling = factor(disclose_sibling,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_child = factor(disclose_child,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_colleague = factor(disclose_colleague,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_grandparent = factor(disclose_grandparent,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_extendadult = factor(disclose_extendadult,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_extendadol = factor(disclose_extendadol,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_friend = factor(disclose_friend,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_church = factor(disclose_church,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_employer = factor(disclose_employer,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_schoolmate = factor(disclose_schoolmate,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_teacher = factor(disclose_teacher,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_grandchild = factor(disclose_grandchild,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_neighbor = factor(disclose_neighbor,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>%
+  mutate(disclose_any = factor(disclose_any,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>% 
+  mutate(disclose_immedfam = factor(disclose_immedfam,
+                    levels = c(0,1),
+                    labels = c("Not disclosed", "Disclosed"))) %>% 
+  mutate(missdose = factor(missdose,
+                            levels = c(0,1),
+                            labels = c("No missed doses", "Missed 1 or more doses"))) %>%
+  mutate(vl1000 = factor(vl1000,
+                            levels = c(0,1),
+                            labels = c("VL<1000 c/ml", "VL>=1000 c/ml")))
+
+# table 1
+pvalue <- function(x, ...) {
+    # Construct vectors of data y, and groups (strata) g
+    y <- unlist(x)
+    g <- factor(rep(1:length(x), times=sapply(x, length)))
+    if (is.numeric(y)) {
+        # For numeric variables, perform a standard 2-sample t-test
+        p <- t.test(y ~ g)$p.value
+    } else {
+        # For categorical variables, perform a chi-squared test of independence
+        p <- chisq.test(table(y, g))$p.value
+    }
+    # Format the p-value, using an HTML entity for the less-than sign.
+    # The initial empty string places the output on the line below the variable label.
+    c("", sub("<", "&lt;", format.pval(p, digits=3, eps=0.001)))
+}
+
+
+# t1 <- table1(~ gender + age + progid + hholdur + education + vertical + dur_art + missarv + missdose +
+#                arvsupp + hivsupportgroup + enrl_ovc + mealnum_c + mealcut_c + foodinsecure + alcohol + cigaret + drug +
+#                discrim_disrupt_care + unwlove + disclose_spouse + disclose_parent + disclose_sibling + disclose_child +
+#                disclose_colleague + disclose_grandparent + disclose_extendadult + disclose_extendadol + disclose_friend +
+#                disclose_church + disclose_employer + disclose_schoolmate + disclose_teacher + disclose_grandchild +
+#                disclose_neighbor + disclose_any, pop0)
+# t1flex(t1)
+
+t2 <- table1(~ vertical + missdose + vl1000 + disclose_spouse + disclose_parent + disclose_sibling + disclose_child +
+               disclose_colleague + disclose_grandparent + disclose_extendadult + disclose_extendadol + disclose_friend +
+               disclose_church + disclose_employer + disclose_schoolmate + disclose_teacher + disclose_any +
+               disclose_immedfam | gender, pop_cc, overall=c(right="Total"), extra.col=list(`P-value`=pvalue))
+t1flex(t2)
+
+t3 <- table1(~ disclose_spouse + disclose_parent + disclose_sibling + disclose_child +
+               disclose_colleague + disclose_grandparent + disclose_extendadult + disclose_extendadol + disclose_friend +
+               disclose_church + disclose_employer + disclose_schoolmate + disclose_teacher + disclose_any +
+               disclose_immedfam | vertical, pop_cc, overall=c(right="Total"),
+             extra.col=list(`P-value`=pvalue))
+t1flex(t3)
+
+# note: a greater % of those with HIV via vertical transmission have a treatment supporter -- kindof interesting..
+
+# t.test(pop_cc2$age ~ pop_cc2$vertical, alternative = "two.sided", var.equal = FALSE)
+
+```
+
+
+```{r, echo = FALSE}
+
+## MULTIVARIABLE CROSS-SECTIONAL ANALYSES -----
+
+# change reference levels
+# pop_cc2$gender <- relevel(pop_cc2$gender, ref = "Male")
+
+
+## DISCLOSURE --> ART ADHERENCE (1: missed doses ART)
+
+# robust poisson and apply the sandwich error estimator
+model <- glm(missdose ~ disclose_immedfam, data=pop_cc0, family = poisson(link="log"))
+
+# pull out robust coefficients
+model_out <- coeftest(model, vcov = sandwich)
+
+# calculate CIs
+model_out_ci <- round(cbind(exp(cbind(RR = model_out[,1], 
+                              LCI = model_out[,1] + qnorm(0.05/2)*model_out[,2],
+                              UCI = model_out[,1] - qnorm(0.05/2)*model_out[,2])),
+                              P = model_out[,4]),2)
+
+# output the table
+model_out_ci %>%
+  kable() %>%
+  kable_styling()
+
+# robust poisson and apply the sandwich error estimator
+model <- glm(missdose ~ disclose_immedfam + gender + age + progid, data=pop_cc0, family = poisson(link="log"))
+
+# pull out robust coefficients
+model_out <- coeftest(model, vcov = sandwich)
+
+# calculate CIs
+model_out_ci <- round(cbind(exp(cbind(RR = model_out[,1], 
+                              LCI = model_out[,1] + qnorm(0.05/2)*model_out[,2],
+                              UCI = model_out[,1] - qnorm(0.05/2)*model_out[,2])),
+                              P = model_out[,4]),2)
+
+# output the table
+model_out_ci %>%
+  kable() %>%
+  kable_styling()
+
+
+## DISCLOSURE --> VIRAL NONSUPPRESSION (1: VL>=1000 c/ml)
+
+# robust poisson and apply the sandwich error estimator
+model <- glm(vl1000 ~ disclose_immedfam, data=pop_cc0, family = poisson(link="log"))
+
+# pull out robust coefficients
+model_out <- coeftest(model, vcov = sandwich)
+
+# calculate CIs
+model_out_ci <- round(cbind(exp(cbind(RR = model_out[,1], 
+                              LCI = model_out[,1] + qnorm(0.05/2)*model_out[,2],
+                              UCI = model_out[,1] - qnorm(0.05/2)*model_out[,2])),
+                              P = model_out[,4]),2)
+
+# output the table
+model_out_ci %>%
+  kable() %>%
+  kable_styling()
+
+# robust poisson and apply the sandwich error estimator
+model <- glm(vl1000 ~ disclose_immedfam + gender + age + progid + missdose, data=pop_cc0, family = poisson(link="log"))
+
+# pull out robust coefficients
+model_out <- coeftest(model, vcov = sandwich)
+
+# calculate CIs
+model_out_ci <- round(cbind(exp(cbind(RR = model_out[,1], 
+                              LCI = model_out[,1] + qnorm(0.05/2)*model_out[,2],
+                              UCI = model_out[,1] - qnorm(0.05/2)*model_out[,2])),
+                              P = model_out[,4]),2)
+
+# output the table
+model_out_ci %>%
+  kable() %>%
+  kable_styling()
+
+
+## TEST INTERACTION TERMS
+
+# robust poisson and apply the sandwich error estimator
+model <- glm(missdose ~ disclose_immedfam*vertical, data=pop_cc0, family = poisson(link="log"))
+
+# pull out robust coefficients
+model_out <- coeftest(model, vcov = sandwich)
+
+# calculate CIs
+model_out_ci <- round(cbind(exp(cbind(RR = model_out[,1], 
+                              LCI = model_out[,1] + qnorm(0.05/2)*model_out[,2],
+                              UCI = model_out[,1] - qnorm(0.05/2)*model_out[,2])),
+                              P = model_out[,4]),2)
+
+# output the table
+model_out_ci %>%
+  kable() %>%
+  kable_styling()
+
+
+## Note: I am seeing effect modification by sex...
+
+# robust poisson and apply the sandwich error estimator
+model <- glm(missdose ~ disclose_immedfam*gender + age + progid, data=pop_cc0, family = poisson(link="log"))
+
+# pull out robust coefficients
+model_out <- coeftest(model, vcov = sandwich)
+
+# calculate CIs
+model_out_ci <- round(cbind(exp(cbind(RR = model_out[,1], 
+                              LCI = model_out[,1] + qnorm(0.05/2)*model_out[,2],
+                              UCI = model_out[,1] - qnorm(0.05/2)*model_out[,2])),
+                              P = model_out[,4]),2)
+
+# output the table
+model_out_ci %>%
+  kable() %>%
+  kable_styling()
+
+
+# robust poisson and apply the sandwich error estimator
+model <- glm(vl1000 ~ disclose_immedfam*gender + age + progid + missdose, data=pop_cc0, family = poisson(link="log"))
+
+# pull out robust coefficients
+model_out <- coeftest(model, vcov = sandwich)
+
+# calculate CIs
+model_out_ci <- round(cbind(exp(cbind(RR = model_out[,1], 
+                              LCI = model_out[,1] + qnorm(0.05/2)*model_out[,2],
+                              UCI = model_out[,1] - qnorm(0.05/2)*model_out[,2])),
+                              P = model_out[,4]),2)
+
+# output the table
+model_out_ci %>%
+  kable() %>%
+  kable_styling()
+
+
+## Stratify models by sex
+
+pop_cc_f <- pop_cc0 %>% filter(gender=="Female")
+pop_cc_m <- pop_cc0 %>% filter(gender=="Male")
+
+## ART adherence
+
+# robust poisson and apply the sandwich error estimator
+model <- glm(nomissdose ~ disclose_immedfam + age + progid, data=pop_cc_f, family = poisson(link="log"))
+
+# pull out robust coefficients
+model_out <- coeftest(model, vcov = sandwich)
+
+# calculate CIs
+model_out_ci <- round(cbind(exp(cbind(RR = model_out[,1], 
+                              LCI = model_out[,1] + qnorm(0.05/2)*model_out[,2],
+                              UCI = model_out[,1] - qnorm(0.05/2)*model_out[,2])),
+                              P = model_out[,4]),2)
+
+# output the table
+model_out_ci %>%
+  kable() %>%
+  kable_styling()
+
+# robust poisson and apply the sandwich error estimator
+model <- glm(nomissdose ~ disclose_immedfam + age + progid, data=pop_cc_m, family = poisson(link="log"))
+
+# pull out robust coefficients
+model_out <- coeftest(model, vcov = sandwich)
+
+# calculate CIs
+model_out_ci <- round(cbind(exp(cbind(RR = model_out[,1], 
+                              LCI = model_out[,1] + qnorm(0.05/2)*model_out[,2],
+                              UCI = model_out[,1] - qnorm(0.05/2)*model_out[,2])),
+                              P = model_out[,4]),2)
+
+# output the table
+model_out_ci %>%
+  kable() %>%
+  kable_styling()
+
+
+## Viral suppression
+
+# robust poisson and apply the sandwich error estimator
+model <- glm(vls1000 ~ disclose_immedfam + age + progid + missdose, data=pop_cc_f, family = poisson(link="log"))
+
+# pull out robust coefficients
+model_out <- coeftest(model, vcov = sandwich)
+
+# calculate CIs
+model_out_ci <- round(cbind(exp(cbind(RR = model_out[,1], 
+                              LCI = model_out[,1] + qnorm(0.05/2)*model_out[,2],
+                              UCI = model_out[,1] - qnorm(0.05/2)*model_out[,2])),
+                              P = model_out[,4]),2)
+
+# output the table
+model_out_ci %>%
+  kable() %>%
+  kable_styling()
+
+# robust poisson and apply the sandwich error estimator
+model <- glm(vls1000 ~ disclose_immedfam + age + progid + missdose, data=pop_cc_m, family = poisson(link="log"))
+
+# pull out robust coefficients
+model_out <- coeftest(model, vcov = sandwich)
+
+# calculate CIs
+model_out_ci <- round(cbind(exp(cbind(RR = model_out[,1], 
+                              LCI = model_out[,1] + qnorm(0.05/2)*model_out[,2],
+                              UCI = model_out[,1] - qnorm(0.05/2)*model_out[,2])),
+                              P = model_out[,4]),2)
+
+# output the table
+model_out_ci %>%
+  kable() %>%
+  kable_styling()
+
+```
+
+
+```{r, echo = FALSE}
+
+## MULTIVARIABLE LONGITUDINAL ANALYSES -----
+
+## DISCLOSURE --> ART ADHERENCE (1: missed doses ART)
+
+# estimate the model and store results in m (this uses lme4, currently not able to load Matrix package)
+m1<- glmer(missdose ~ disclose_immedfam + (1 | subjid), data = pop_cc0, family = binomial,
+           control = glmerControl(optimizer = "bobyqa"), nAGQ = 10)
+
+# print the mod results without correlations among fixed effects
+print(m1, corr = FALSE)
+
+# table of estimates with 95% CI
+se <- sqrt(diag(vcov(m1)))
+tab <- cbind(Est = fixef(m1), LL = fixef(m1) - 1.96 * se, UL = fixef(m1) + 1.96 * se)
+exp(tab)
+
+```
